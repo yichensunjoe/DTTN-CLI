@@ -1,5 +1,8 @@
 //! Logo component — renders the braille art logo.
 //!
+//! DTTN customization: the upstream single-letter mark is replaced by a
+//! DTTN wordmark while retaining the original animated gradient renderer.
+//!
 //! Hidden entirely on legacy Windows consoles: the U+2800 braille block is
 //! not covered by the ConHost raster fonts and would render as tofu.
 
@@ -12,8 +15,8 @@ use ratatui::widgets::{Paragraph, Widget};
 use crate::render::color::blend_color;
 use crate::theme::Theme;
 
-const LOGO: &str = include_str!("../../../assets/logo/logo07.txt");
-const LOGO_SMALL: &str = include_str!("../../../assets/logo/logo05.txt");
+const LOGO: &str = include_str!("../../../assets/logo/dttn07.txt");
+const LOGO_SMALL: &str = include_str!("../../../assets/logo/dttn05.txt");
 
 /// Height at or above which the small logo is shown (below it, no logo).
 const SMALL_LOGO_MIN_HEIGHT: u16 = 22;
