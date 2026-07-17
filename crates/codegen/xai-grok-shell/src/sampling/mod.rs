@@ -27,6 +27,7 @@ pub use async_openai::types::responses as rs;
 // composite was removed when its only remaining role -- session-snapshot
 // state for `MvpAgent` -- was migrated to `RefCell<SamplerConfig>` directly.
 pub use xai_grok_sampler::{
-    InferenceLatencyStats, OriginClientInfo, RequestId, SamplerActor, SamplerConfig, SamplerHandle,
-    SamplingChannel, SamplingClient, SamplingErrorInfo, SamplingErrorKind, SamplingEvent,
+    InferenceLatencyStats, OriginClientInfo, RequestId, RetryPolicy, SamplerActor, SamplerConfig,
+    SamplerHandle, SamplingChannel, SamplingClient, SamplingErrorInfo, SamplingErrorKind,
+    SamplingEvent,
 };
