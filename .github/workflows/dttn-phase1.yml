@@ -1,0 +1,37 @@
+name: DTTN Phase 1
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "refactor/**"
+
+permissions:
+  contents: read
+
+jobs:
+  distribution-boundary:
+    name: Validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Validate DTTN distribution boundary
+        run: python scripts/check_dttn_phase1.py
+
+      - name: Test embedded model defaults
+        run: cargo test -p xai-grok-models
