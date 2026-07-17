@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python scripts/apply_dttn_phase3.py 2>&1 | tee phase3-migration.log
+          python scripts/apply_dttn_phase3_fixed.py 2>&1 | tee phase3-migration.log
 
       - name: Format and validate provider layer
         shell: bash
