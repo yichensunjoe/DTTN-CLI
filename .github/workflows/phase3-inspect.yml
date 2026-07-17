@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - refactor/dttn-model-provider-phase-3
+  pull_request:
+    branches:
+      - refactor/dttn-core-phase-1
 
 permissions:
   contents: read
