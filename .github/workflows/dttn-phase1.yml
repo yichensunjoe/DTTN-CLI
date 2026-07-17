@@ -48,6 +48,12 @@ jobs:
       - name: Show Rust toolchain
         run: rustup show active-toolchain
 
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+          protoc --version
+
       - name: Check dttn binary
         shell: bash
         run: |
