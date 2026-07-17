@@ -37,17 +37,17 @@ pub enum AgentMode {
     Generic,
 }
 /// Default agent type when the server or user config doesn't specify one.
-pub const DEFAULT_AGENT_TYPE: &str = "grok-build-plan";
+pub const DEFAULT_AGENT_TYPE: &str = "dttn-code-agent";
 /// Serde default for `ModelInfo.agent_type` and `ModelEntryConfig.agent_type`.
 pub fn default_agent_type() -> String {
     DEFAULT_AGENT_TYPE.to_owned()
 }
 /// Default base URL for the cli chat proxy.
-pub const CLI_CHAT_PROXY_BASE_URL_DEFAULT: &str = "https://cli-chat-proxy.grok.com/v1";
+pub const CLI_CHAT_PROXY_BASE_URL_DEFAULT: &str = "https://gateway.dttn.invalid/v1";
 /// Default base URL for the public xAI API.
-pub const XAI_API_BASE_URL_DEFAULT: &str = "https://api.x.ai/v1";
+pub const XAI_API_BASE_URL_DEFAULT: &str = "https://inference.dttn.invalid/v1";
 /// Default base URL for the asset server (profile images, etc.).
-pub const ASSET_SERVER_URL_DEFAULT: &str = "https://assets.grok.com";
+pub const ASSET_SERVER_URL_DEFAULT: &str = "https://assets.dttn.invalid";
 /// One or more environment variable names that may hold a model API key.
 ///
 /// Serde `untagged`: accepts a string or an array in TOML/JSON.
@@ -248,7 +248,8 @@ pub struct EndpointsConfig {
     pub gcs_service_account_key: Option<String>,
 }
 pub(crate) fn default_asset_server_url() -> String {
-    std::env::var("GROK_ASSET_SERVER_URL").unwrap_or_else(|_| ASSET_SERVER_URL_DEFAULT.to_owned())
+    env_string_with_legacy("DTTN_ASSET_SERVER_URL", "GROK_ASSET_SERVER_URL")
+        .unwrap_or_else(|| ASSET_SERVER_URL_DEFAULT.to_owned())
 }
 /// A blank or whitespace-only override counts as unset. Single source of truth
 /// for the "empty value = not configured" rule shared by the endpoint resolvers.
@@ -540,26 +541,68 @@ impl EndpointsConfig {
 impl Default for EndpointsConfig {
     fn default() -> Self {
         Self {
-            cli_chat_proxy_base_url: std::env::var("GROK_CLI_CHAT_PROXY_BASE_URL").ok(),
-            xai_api_base_url: std::env::var("GROK_XAI_API_BASE_URL")
-                .unwrap_or_else(|_| XAI_API_BASE_URL_DEFAULT.to_owned()),
+            cli_chat_proxy_base_url: env_string_with_legacy(
+                "DTTN_GATEWAY_BASE_URL",
+                "GROK_CLI_CHAT_PROXY_BASE_URL",
+            ),
+            xai_api_base_url: env_string_with_legacy(
+                "DTTN_INFERENCE_BASE_URL",
+                "GROK_XAI_API_BASE_URL",
+            )
+            .unwrap_or_else(|| XAI_API_BASE_URL_DEFAULT.to_owned()),
             alpha_test_key: None,
-            models_base_url: env_string("GROK_MODELS_BASE_URL"),
-            models_list_url: env_string("GROK_MODELS_LIST_URL"),
-            feedback_base_url: env_string("GROK_FEEDBACK_BASE_URL"),
-            trace_upload_url: env_string("GROK_TRACE_UPLOAD_URL"),
-            trace_upload_bucket: env_string("GROK_TRACE_UPLOAD_BUCKET"),
-            trace_upload_region: env_string("GROK_TRACE_UPLOAD_REGION"),
-            trace_upload_credentials_file: env_string("GROK_TRACE_UPLOAD_CREDENTIALS_FILE"),
+            models_base_url: env_string_with_legacy(
+                "DTTN_MODELS_BASE_URL",
+                "GROK_MODELS_BASE_URL",
+            ),
+            models_list_url: env_string_with_legacy(
+                "DTTN_MODELS_LIST_URL",
+                "GROK_MODELS_LIST_URL",
+            ),
+            feedback_base_url: env_string_with_legacy(
+                "DTTN_FEEDBACK_BASE_URL",
+                "GROK_FEEDBACK_BASE_URL",
+            ),
+            trace_upload_url: env_string_with_legacy(
+                "DTTN_TRACE_UPLOAD_URL",
+                "GROK_TRACE_UPLOAD_URL",
+            ),
+            trace_upload_bucket: env_string_with_legacy(
+                "DTTN_TRACE_UPLOAD_BUCKET",
+                "GROK_TRACE_UPLOAD_BUCKET",
+            ),
+            trace_upload_region: env_string_with_legacy(
+                "DTTN_TRACE_UPLOAD_REGION",
+                "GROK_TRACE_UPLOAD_REGION",
+            ),
+            trace_upload_credentials_file: env_string_with_legacy(
+                "DTTN_TRACE_UPLOAD_CREDENTIALS_FILE",
+                "GROK_TRACE_UPLOAD_CREDENTIALS_FILE",
+            ),
             trace_upload_credentials: None,
-            trace_upload_endpoint_url: env_string("GROK_TRACE_UPLOAD_ENDPOINT_URL"),
-            deployment_key: env_string("GROK_DEPLOYMENT_KEY"),
-            managed_config_url: env_string("GROK_MANAGED_CONFIG_URL"),
+            trace_upload_endpoint_url: env_string_with_legacy(
+                "DTTN_TRACE_UPLOAD_ENDPOINT_URL",
+                "GROK_TRACE_UPLOAD_ENDPOINT_URL",
+            ),
+            deployment_key: env_string_with_legacy(
+                "DTTN_DEPLOYMENT_KEY",
+                "GROK_DEPLOYMENT_KEY",
+            ),
+            managed_config_url: env_string_with_legacy(
+                "DTTN_MANAGED_CONFIG_URL",
+                "GROK_MANAGED_CONFIG_URL",
+            ),
             otel_exporter_otlp_endpoint: env_string("OTEL_EXPORTER_OTLP_ENDPOINT"),
             otel_exporter_otlp_traces_endpoint: env_string("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
             otel_exporter_otlp_headers: env_string("OTEL_EXPORTER_OTLP_HEADERS"),
-            grok_internal_otlp_traces_endpoint: env_string("GROK_INTERNAL_OTLP_TRACES_ENDPOINT"),
-            grok_internal_otlp_headers: env_string("GROK_INTERNAL_OTLP_HEADERS"),
+            grok_internal_otlp_traces_endpoint: env_string_with_legacy(
+                "DTTN_INTERNAL_OTLP_TRACES_ENDPOINT",
+                "GROK_INTERNAL_OTLP_TRACES_ENDPOINT",
+            ),
+            grok_internal_otlp_headers: env_string_with_legacy(
+                "DTTN_INTERNAL_OTLP_HEADERS",
+                "GROK_INTERNAL_OTLP_HEADERS",
+            ),
             external_otel_master_switch: external_otel_master_switch_resolved(),
             otel_traces_exporter: env_string("OTEL_TRACES_EXPORTER"),
             otel_traces_export_interval: env_string("OTEL_BSP_SCHEDULE_DELAY")
@@ -660,6 +703,12 @@ pub(crate) fn env_string(name: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+/// Resolve a DTTN environment variable first, then a temporary legacy alias.
+/// New deployments must only set the DTTN-prefixed variable.
+pub(crate) fn env_string_with_legacy(primary: &str, legacy: &str) -> Option<String> {
+    env_string(primary).or_else(|| env_string(legacy))
 }
 pub use xai_grok_config::env_bool;
 /// Compaction-mode precedence (env > config > remote settings > default, with
