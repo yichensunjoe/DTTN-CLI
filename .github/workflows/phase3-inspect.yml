@@ -17,8 +17,6 @@ jobs:
     if: github.head_ref == 'refactor/dttn-model-provider-phase-3'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: write
     steps:
       - name: Checkout branch
         uses: actions/checkout@v6
@@ -31,10 +29,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes protobuf-compiler
 
-      - name: Wire model doctor entrypoint
-        shell: bash
-        run: python scripts/apply_dttn_model_doctor_entrypoint.py
-
       - name: Validate provider compatibility layer
         shell: bash
         run: |
@@ -46,28 +40,13 @@ jobs:
                 "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
             )
             if (( ${#changed_rust[@]} > 0 )); then
-              rustfmt --edition 2024 "${changed_rust[@]}"
+              rustfmt --edition 2024 --check "${changed_rust[@]}"
             fi
             cargo test -p xai-grok-sampling-types
             cargo test -p xai-grok-sampler
-            cargo test -p xai-grok-sampler --test provider_extensions
-            cargo check -p xai-grok-shell
             cargo check -p xai-grok-pager-bin --bin dttn
-            git diff --check
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
           } 2>&1 | tee phase3-validation.log
-
-      - name: Commit generated entrypoint
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "Model doctor entrypoint already committed"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/codegen
-          git commit -m "feat: wire dttn model doctor command"
-          git push origin HEAD:${{ github.head_ref }}
 
       - name: Upload validation diagnostics
         if: always()
