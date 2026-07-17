@@ -1,0 +1,38 @@
+# DTTN-CLI 企业发行配置示例。
+#
+# 保存到：
+#   macOS / Linux: $DTTN_HOME/config.toml 或 ~/.dttn/config.toml
+#   Windows:       $env:DTTN_HOME\config.toml
+
+[models]
+default = "agnes-2.0-flash"
+web_search = "agnes-2.0-flash"
+image_description = "agnes-2.0-flash"
+session_summary = "agnes-2.0-flash"
+agent_type = "dttn-code-agent"
+
+# 限制交互式会话可选模型，防止用户绕过组织模型策略。
+allowed_models = ["agnes-2.0-flash"]
+
+# 推理请求的全局默认值。模型目录中的每模型配置可覆盖这些值。
+temperature = 0.7
+top_p = 0.95
+max_retries = 3
+inference_idle_timeout_secs = 120
+
+[endpoints]
+# OpenAI Responses 兼容的推理服务根地址。
+models_base_url = "https://models.example.internal/v1"
+
+# 模型目录接口。未设置时默认使用 `${models_base_url}/models`。
+models_list_url = "https://models.example.internal/v1/models"
+
+[cli]
+# Leader 模式可复用长生命周期运行时并支持会话恢复。
+use_leader = true
+
+[plugins]
+# 企业发行版建议显式管理插件来源，不从项目目录自动信任插件。
+paths = []
+enabled = []
+disabled = []
