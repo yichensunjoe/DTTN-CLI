@@ -49,4 +49,16 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Check dttn binary
-        run: cargo check -p xai-grok-pager-bin --bin dttn
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check -p xai-grok-pager-bin --bin dttn 2>&1 | tee cargo-check.log
+
+      - name: Upload composition check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dttn-composition-check-log
+          path: cargo-check.log
+          if-no-files-found: error
+          retention-days: 7
