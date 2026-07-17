@@ -211,6 +211,7 @@ impl ShellToolsetConfig {
             temperature: None,
             top_p: None,
             api_backend: Default::default(),
+            provider_extensions: Default::default(),
             auth_scheme: Default::default(),
             extra_headers: indexmap::IndexMap::new(),
             context_window: 256_000,

@@ -826,6 +826,15 @@ pub fn parse_remote_model_value(
             _ => None,
         })
         .unwrap_or_default();
+    let provider_extensions = get_string(obj, "providerExtensions")
+        .or_else(|| get_string(obj, "provider_extensions"))
+        .and_then(|s| match s.as_str() {
+            "auto" => Some(xai_grok_sampling_types::ProviderExtensions::Auto),
+            "standard" => Some(xai_grok_sampling_types::ProviderExtensions::Standard),
+            "xai" => Some(xai_grok_sampling_types::ProviderExtensions::Xai),
+            _ => None,
+        })
+        .unwrap_or_default();
     Some(crate::agent::config::ModelEntryConfig {
         id,
         model,
@@ -840,6 +849,7 @@ pub fn parse_remote_model_value(
         api_key: get_string(obj, "apiKey").or_else(|| get_string(obj, "api_key")),
         env_key: get_env_keys(obj, "envKey").or_else(|| get_env_keys(obj, "env_key")),
         api_backend,
+        provider_extensions,
         context_window,
         auto_compact_threshold_percent: get_u64(obj, "autoCompactThresholdPercent")
             .or_else(|| get_u64(obj, "auto_compact_threshold_percent"))

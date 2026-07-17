@@ -25,7 +25,7 @@ use xai_grok_sampler::{
     SamplingErrorKind, SamplingEvent,
 };
 use xai_grok_sampling_types::{
-    ConversationItem, ConversationRequest, DoomLoopRecoveryPolicy, UserItem,
+    ConversationItem, ConversationRequest, DoomLoopRecoveryPolicy, ProviderExtensions, UserItem,
 };
 use xai_grok_test_support::{SseEvent, sse};
 
@@ -77,6 +77,7 @@ fn test_config(base_url: String, model: &str) -> SamplerConfig {
         temperature: None,
         top_p: None,
         api_backend: ApiBackend::ChatCompletions,
+        provider_extensions: Default::default(),
         auth_scheme: Default::default(),
         extra_headers: IndexMap::new(),
         context_window: 128_000,
@@ -772,6 +773,7 @@ async fn update_config_changes_subsequent_request_model() {
 fn responses_config(base_url: String, doom_loop: Option<DoomLoopRecoveryPolicy>) -> SamplerConfig {
     let mut cfg = test_config(base_url, "test-model");
     cfg.api_backend = ApiBackend::Responses;
+    cfg.provider_extensions = ProviderExtensions::Xai;
     cfg.doom_loop_recovery = doom_loop;
     cfg
 }

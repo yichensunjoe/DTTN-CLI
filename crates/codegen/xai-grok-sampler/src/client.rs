@@ -24,8 +24,8 @@ use xai_grok_sampling_types::error::{parse_error_bytes, try_parse_stream_error};
 use xai_grok_sampling_types::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ConversationRequest,
     ConversationResponse, CreateResponseWrapper, DOOM_LOOP_CHECK_HEADER, MessagesRequestWrapper,
-    ResponseModelMetadata, Result, SamplingError, build_messages_request, is_check_event, messages,
-    rs,
+    ProviderExtensions, ResponseModelMetadata, Result, SamplingError, build_messages_request,
+    is_check_event, messages, rs,
 };
 
 use crate::config::{AuthScheme, OriginClientInfo, SamplerConfig};
@@ -33,11 +33,11 @@ use crate::config::{AuthScheme, OriginClientInfo, SamplerConfig};
 // Re-export ApiBackend from the shared types crate for downstream callers.
 pub use xai_grok_sampling_types::ApiBackend;
 
-/// Process-level fallback for the `x-grok-client-identifier` header.
-const DEFAULT_CLIENT_IDENTIFIER: &str = "grok-shell";
+/// Process-level fallback for the xAI compatibility client identifier.
+const DEFAULT_XAI_CLIENT_IDENTIFIER: &str = "dttn-cli";
 
 /// Product identifier baked into User-Agent strings.
-const AGENT_PRODUCT: &str = "grok-shell";
+const AGENT_PRODUCT: &str = "dttn-cli";
 const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 128_000;
 
 /// Per-request `x-grok-*` headers. Optional fields are skipped when empty/`None`.
@@ -313,6 +313,7 @@ struct ClientDefaults {
     temperature: Option<f32>,
     top_p: Option<f32>,
     api_backend: ApiBackend,
+    provider_extensions: ProviderExtensions,
     auth_scheme: AuthScheme,
     stream_tool_calls: bool,
     doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
@@ -391,6 +392,65 @@ pub fn user_agent_string_for(origin: &OriginClientInfo) -> String {
 // SamplingClient
 // =============================================================================
 
+fn resolve_provider_extensions(mode: ProviderExtensions, base_url: &str) -> ProviderExtensions {
+    if !matches!(mode, ProviderExtensions::Auto) {
+        return mode;
+    }
+    let is_xai = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| {
+            host == "x.ai"
+                || host.ends_with(".x.ai")
+                || host == "grok.com"
+                || host.ends_with(".grok.com")
+        });
+    if is_xai {
+        ProviderExtensions::Xai
+    } else {
+        ProviderExtensions::Standard
+    }
+}
+
+fn validate_provider_extensions(
+    config: &SamplerConfig,
+    resolved: ProviderExtensions,
+) -> Result<()> {
+    if resolved.uses_xai() {
+        return Ok(());
+    }
+    if config.stream_tool_calls {
+        return Err(SamplingError::InvalidConfiguration(
+            "stream_tool_calls requires provider_extensions = xai",
+        ));
+    }
+    if config.supports_backend_search {
+        return Err(SamplingError::InvalidConfiguration(
+            "backend search requires provider_extensions = xai",
+        ));
+    }
+    if config.compactions_remaining.is_some() || config.compaction_at_tokens.is_some() {
+        return Err(SamplingError::InvalidConfiguration(
+            "server compaction headers require provider_extensions = xai",
+        ));
+    }
+    if config.doom_loop_recovery.is_some() {
+        return Err(SamplingError::InvalidConfiguration(
+            "server doom-loop recovery requires provider_extensions = xai",
+        ));
+    }
+    if config.extra_headers.keys().any(|name| {
+        name.eq_ignore_ascii_case("x-compaction-at")
+            || name.eq_ignore_ascii_case("x-compactions-remaining")
+            || name.to_ascii_lowercase().starts_with("x-grok-")
+    }) {
+        return Err(SamplingError::InvalidConfiguration(
+            "xAI private headers require provider_extensions = xai",
+        ));
+    }
+    Ok(())
+}
+
 impl SamplingClient {
     /// Construct a sampling client from a [`SamplerConfig`].
     ///
@@ -399,6 +459,10 @@ impl SamplingClient {
     /// pre-computes the default request headers. This does not perform
     /// any network I/O.
     pub fn new(config: SamplerConfig) -> Result<Self> {
+        let provider_extensions =
+            resolve_provider_extensions(config.provider_extensions, &config.base_url);
+        validate_provider_extensions(&config, provider_extensions)?;
+
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if let Some(ref api_key) = config.api_key {
@@ -444,36 +508,36 @@ impl SamplingClient {
             headers.insert(header_name, header_value);
         }
 
-        // Add x-grok-client-version header for version gating at the proxy.
-        if let Some(client_version) = config.client_version.as_ref()
-            && let Ok(header_value) = HeaderValue::from_str(client_version)
-        {
-            headers.insert(
-                HeaderName::from_static("x-grok-client-version"),
-                header_value,
-            );
-        }
+        if provider_extensions.uses_xai() {
+            // xAI compatibility headers are never sent to standard providers.
+            if let Some(client_version) = config.client_version.as_ref()
+                && let Ok(header_value) = HeaderValue::from_str(client_version)
+            {
+                headers.insert(
+                    HeaderName::from_static("x-grok-client-version"),
+                    header_value,
+                );
+            }
 
-        if let Some(deployment_id) = config.deployment_id.as_ref()
-            && let Ok(header_value) = HeaderValue::from_str(deployment_id)
-        {
-            headers.insert(
-                HeaderName::from_static("x-grok-deployment-id"),
-                header_value,
-            );
-        }
+            if let Some(deployment_id) = config.deployment_id.as_ref()
+                && let Ok(header_value) = HeaderValue::from_str(deployment_id)
+            {
+                headers.insert(
+                    HeaderName::from_static("x-grok-deployment-id"),
+                    header_value,
+                );
+            }
 
-        if let Some(user_id) = config.user_id.as_ref()
-            && let Ok(header_value) = HeaderValue::from_str(user_id)
-        {
-            headers.insert(HeaderName::from_static("x-grok-user-id"), header_value);
-        }
+            if let Some(user_id) = config.user_id.as_ref()
+                && let Ok(header_value) = HeaderValue::from_str(user_id)
+            {
+                headers.insert(HeaderName::from_static("x-grok-user-id"), header_value);
+            }
 
-        {
             let client_id = config
                 .client_identifier
                 .clone()
-                .unwrap_or_else(|| DEFAULT_CLIENT_IDENTIFIER.to_string());
+                .unwrap_or_else(|| DEFAULT_XAI_CLIENT_IDENTIFIER.to_string());
             if let Ok(header_value) = HeaderValue::from_str(&client_id) {
                 headers.insert(
                     HeaderName::from_static("x-grok-client-identifier"),
@@ -509,6 +573,7 @@ impl SamplingClient {
             base_url = %config.base_url,
             model = %config.model,
             api_backend = ?config.api_backend,
+            provider_extensions = ?provider_extensions,
             auth_scheme = ?config.auth_scheme,
             // "unset" (not "none"): `ReasoningEffort::None` is a real wire value;
             // logging the absent Option as "none" looked like we were sending it.
@@ -525,6 +590,7 @@ impl SamplingClient {
             temperature: config.temperature,
             top_p: config.top_p,
             api_backend: config.api_backend,
+            provider_extensions,
             auth_scheme: config.auth_scheme,
             stream_tool_calls: config.stream_tool_calls,
             doom_loop_recovery: config.doom_loop_recovery,
@@ -544,6 +610,18 @@ impl SamplingClient {
     /// The configured API backend for this client.
     pub fn api_backend(&self) -> ApiBackend {
         self.defaults.api_backend.clone()
+    }
+
+    fn apply_provider_headers(
+        &self,
+        builder: reqwest::RequestBuilder,
+        headers: &GrokRequestHeaders<'_>,
+    ) -> reqwest::RequestBuilder {
+        if self.defaults.provider_extensions.uses_xai() {
+            headers.apply(builder)
+        } else {
+            builder
+        }
     }
 
     /// POST with default headers. Overrides auth from resolver if wired.
@@ -704,9 +782,11 @@ impl SamplingClient {
             })
             .collect();
 
-        req_headers.push(Self::format_header("x-grok-conv-id", x_grok_conv_id));
-        req_headers.push(Self::format_header("x-grok-req-id", x_grok_req_id));
-        req_headers.push(Self::format_header("x-grok-model-override", model_id));
+        if self.defaults.provider_extensions.uses_xai() {
+            req_headers.push(Self::format_header("x-grok-conv-id", x_grok_conv_id));
+            req_headers.push(Self::format_header("x-grok-req-id", x_grok_req_id));
+            req_headers.push(Self::format_header("x-grok-model-override", model_id));
+        }
         if include_accept {
             req_headers.push(Self::format_header("accept", "text/event-stream"));
         }
@@ -861,8 +941,8 @@ impl SamplingClient {
             deployment_id: payload.x_grok_deployment_id.as_deref(),
             user_id: payload.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("chat/completions")))
+        let http_request = self
+            .apply_provider_headers(self.post(self.endpoint("chat/completions")), &grok_headers)
             .json(&payload);
 
         let response = http_request.send().await.map_err(|e| {
@@ -919,8 +999,8 @@ impl SamplingClient {
             deployment_id: payload.x_grok_deployment_id.as_deref(),
             user_id: payload.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("chat/completions")))
+        let http_request = self
+            .apply_provider_headers(self.post(self.endpoint("chat/completions")), &grok_headers)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
             .json(&streaming_request);
 
@@ -1142,8 +1222,8 @@ impl SamplingClient {
         // it in post-serialize. This is the last surviving piece of the
         // old raw_output machinery.
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("responses")))
+        let http_request = self
+            .apply_provider_headers(self.post(self.endpoint("responses")), &grok_headers)
             .json(&request_body);
 
         let response = http_request.send().await.map_err(|e| {
@@ -1273,17 +1353,22 @@ impl SamplingClient {
             tracing::error!("Failed to serialize responses request: {}", e);
             SamplingError::Serialization(e)
         })?;
-        // Inject xAI-specific fields not in async-openai's CreateResponse type.
-        if self.defaults.stream_tool_calls {
-            request_body["stream_tool_calls"] = serde_json::json!(true);
+        if !self.defaults.provider_extensions.uses_xai() && !extra_raw_tools.is_empty() {
+            return Err(SamplingError::InvalidConfiguration(
+                "raw provider tools require provider_extensions = xai",
+            ));
         }
-        // Inject xAI-specific tools (e.g., x_search) that can't be expressed
-        // via async_openai's rs::Tool enum.
-        if !extra_raw_tools.is_empty() {
-            if let Some(tools) = request_body.get_mut("tools").and_then(|v| v.as_array_mut()) {
-                tools.extend(extra_raw_tools);
-            } else {
-                request_body["tools"] = serde_json::Value::Array(extra_raw_tools);
+        // Inject private fields only for explicitly resolved xAI compatibility.
+        if self.defaults.provider_extensions.uses_xai() {
+            if self.defaults.stream_tool_calls {
+                request_body["stream_tool_calls"] = serde_json::json!(true);
+            }
+            if !extra_raw_tools.is_empty() {
+                if let Some(tools) = request_body.get_mut("tools").and_then(|v| v.as_array_mut()) {
+                    tools.extend(extra_raw_tools);
+                } else {
+                    request_body["tools"] = serde_json::Value::Array(extra_raw_tools);
+                }
             }
         }
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
@@ -1293,8 +1378,8 @@ impl SamplingClient {
             .defaults
             .doom_loop_recovery
             .map(crate::doom_loop::DoomLoopSignalCollector::new);
-        let mut http_request = grok_headers
-            .apply(self.post(self.endpoint("responses")))
+        let mut http_request = self
+            .apply_provider_headers(self.post(self.endpoint("responses")), &grok_headers)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
         if doom_loop.is_some() {
             // Presence opts in; the server ignores the value.
@@ -1500,8 +1585,8 @@ impl SamplingClient {
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("messages")))
+        let http_request = self
+            .apply_provider_headers(self.post(self.endpoint("messages")), &grok_headers)
             .json(&request.inner);
 
         let response = http_request.send().await.map_err(|e| {
@@ -1616,8 +1701,8 @@ impl SamplingClient {
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("messages")))
+        let http_request = self
+            .apply_provider_headers(self.post(self.endpoint("messages")), &grok_headers)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
             .json(&request.inner);
 
@@ -2022,6 +2107,7 @@ mod tests {
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::ChatCompletions,
+            provider_extensions: Default::default(),
             auth_scheme: AuthScheme::Bearer,
             extra_headers: IndexMap::new(),
             context_window: 8192,
@@ -2285,7 +2371,7 @@ mod tests {
         };
         let ua = user_agent_string_for(&origin);
         // No slash between product and the grok-shell agent product.
-        assert!(ua.starts_with("my-client grok-shell/"));
+        assert!(ua.starts_with("my-client dttn-cli/"));
     }
 
     #[test]

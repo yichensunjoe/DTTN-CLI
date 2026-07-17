@@ -917,6 +917,7 @@ async fn read_parent_sampling_config(
                 temperature: cfg.temperature,
                 top_p: cfg.top_p,
                 api_backend: cfg.api_backend,
+                provider_extensions: cfg.provider_extensions,
                 auth_scheme,
                 extra_headers,
                 context_window: cfg.context_window.get(),
