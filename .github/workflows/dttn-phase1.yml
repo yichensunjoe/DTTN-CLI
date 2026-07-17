@@ -68,3 +68,44 @@ jobs:
           path: cargo-check.log
           if-no-files-found: error
           retention-days: 7
+
+  phase2-migration:
+    name: Apply DTTN Phase 2 migration
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/refactor/dttn-core-phase-1' &&
+      github.event.head_commit.message == 'chore: run DTTN phase 2 migration'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout migration branch
+        uses: actions/checkout@v6
+        with:
+          ref: refactor/dttn-core-phase-1
+          fetch-depth: 0
+
+      - name: Apply deterministic migration
+        run: python scripts/apply_dttn_phase2.py
+
+      - name: Validate migration output
+        run: |
+          python scripts/check_dttn_phase1.py
+          python scripts/check_dttn_phase2.py
+          git diff --check
+
+      - name: Commit migration result
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Phase 2 migration produced no changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/codegen/xai-grok-shell/src/agent/config.rs
+          git add crates/codegen/xai-grok-pager-bin/src/main.rs
+          git commit -m "refactor: migrate DTTN runtime identifiers"
+          git push origin HEAD:refactor/dttn-core-phase-1
