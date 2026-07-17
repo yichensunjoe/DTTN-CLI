@@ -103,10 +103,23 @@ jobs:
           retention-days: 7
 
       - name: Validate migration output
+        shell: bash
         run: |
-          python scripts/check_dttn_phase1.py
-          python scripts/check_dttn_phase2.py
-          git diff --check
+          set -o pipefail
+          {
+            python scripts/check_dttn_phase1.py
+            python scripts/check_dttn_phase2.py
+            git diff --check
+          } 2>&1 | tee phase2-validation.log
+
+      - name: Upload validation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dttn-phase2-validation-log
+          path: phase2-validation.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Commit migration result
         shell: bash
