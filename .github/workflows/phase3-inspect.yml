@@ -1,0 +1,61 @@
+name: DTTN Phase 3 Inspect
+
+on:
+  push:
+    branches:
+      - refactor/dttn-model-provider-phase-3
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-model-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Extract model pipeline contexts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          terms = (
+              "ConfigModelOverride",
+              "ModelEntryConfig",
+              "resolve_model_to_sampling_config",
+              "SamplerConfig {",
+              "SamplingConfig {",
+              "stream_tool_calls",
+              "supported_in_api",
+              "GrokRequestHeaders",
+              "create_response_stream",
+              "chat_completion_stream",
+          )
+          roots = [Path("crates/codegen")]
+          out = []
+          for root in roots:
+              for path in sorted(root.rglob("*.rs")):
+                  lines = path.read_text(encoding="utf-8").splitlines()
+                  hits = [i for i, line in enumerate(lines) if any(term in line for term in terms)]
+                  if not hits:
+                      continue
+                  out.append(f"\n===== {path} =====")
+                  emitted = set()
+                  for hit in hits:
+                      start = max(0, hit - 10)
+                      end = min(len(lines), hit + 21)
+                      key = (start, end)
+                      if key in emitted:
+                          continue
+                      emitted.add(key)
+                      out.append(f"--- lines {start + 1}-{end} ---")
+                      out.extend(f"{idx + 1:05d}: {lines[idx]}" for idx in range(start, end))
+          Path("phase3-inspect.txt").write_text("\n".join(out), encoding="utf-8")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase3-model-pipeline-inspect
+          path: phase3-inspect.txt
+          if-no-files-found: error
+          retention-days: 7
