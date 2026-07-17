@@ -5,6 +5,10 @@ on:
     branches:
       - refactor/dttn-core-phase-1
 
+concurrency:
+  group: dttn-phase3-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
