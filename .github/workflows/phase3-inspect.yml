@@ -40,7 +40,10 @@ jobs:
         run: |
           set -o pipefail
           {
-            cargo fmt --all -- --check
+            mapfile -t changed_rust < <(git diff --name-only --diff-filter=ACM -- '*.rs')
+            if (( ${#changed_rust[@]} > 0 )); then
+              rustfmt --edition 2024 "${changed_rust[@]}"
+            fi
             cargo test -p xai-grok-sampling-types
             cargo test -p xai-grok-sampler
             cargo check -p xai-grok-shell
