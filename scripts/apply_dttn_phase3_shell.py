@@ -8,7 +8,12 @@ migration.replace_exact(
     "crates/codegen/xai-grok-shell/src/agent/config.rs",
     "                api_backend: ApiBackend::Responses,\n                auth_scheme: Default::default(),",
     "                api_backend: ApiBackend::Responses,\n                provider_extensions: Default::default(),\n                auth_scheme: Default::default(),",
-    expected=2,
+)
+
+migration.replace_exact(
+    "crates/codegen/xai-grok-shell/src/agent/config.rs",
+    "            api_backend: ApiBackend::Responses,\n            auth_scheme: Default::default(),",
+    "            api_backend: ApiBackend::Responses,\n            provider_extensions: Default::default(),\n            auth_scheme: Default::default(),",
 )
 
 migration.replace_exact(
