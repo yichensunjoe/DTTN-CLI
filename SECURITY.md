@@ -1,7 +1,30 @@
 # Security Policy
 
-Please report security vulnerabilities via our HackerOne program:
+DTTN-CLI 涉及文件系统访问、命令执行、网络请求、插件、MCP 服务和模型工具调用。安全问题必须通过私有渠道处理。
 
-https://hackerone.com/x
+## 报告安全漏洞
 
-Do not open public GitHub issues for security reports.
+请通过部署组织批准的内部安全响应渠道联系项目负责人或安全团队，并提供：
+
+- 受影响版本或提交。
+- 可复现步骤和最小测试用例。
+- 实际影响与可能的攻击路径。
+- 是否涉及凭据泄露、权限绕过、任意命令执行或数据外传。
+- 已知缓解措施。
+
+不要在公开 GitHub Issue、Discussion、Pull Request 或日志中披露漏洞细节、凭据、内部地址或用户数据。
+
+## 重点安全边界
+
+以下变更应按高风险安全修改审查：
+
+- Shell、终端、文件编辑和工作区权限。
+- 沙箱、子进程和网络隔离。
+- 插件、Skills、Hooks 与 MCP 服务加载。
+- Prompt 注入防护和工具授权。
+- 配置签名、受管策略与凭据存储。
+- 遥测、Trace、会话归档和上传。
+
+## 响应原则
+
+收到报告后应先确认影响范围并提供临时缓解方案，再安排修复、回归测试和版本发布。未经安全负责人确认，不应公开披露仍可被利用的问题。
