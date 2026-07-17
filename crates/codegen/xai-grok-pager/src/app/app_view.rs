@@ -3740,6 +3740,21 @@ impl AppView {
                 agent.set_sticky_toast_recursive(None);
             }
         }
+        let session_picker_visible = self.session_picker_entries.is_some()
+            || self.session_picker_loading
+            || self.session_picker_lanes.foreign_loading;
+        let allow_iterm_inline_logo = matches!(&self.active_view, ActiveView::Welcome)
+            && matches!(&self.auth_state, AuthState::Done)
+            && !session_picker_visible
+            && self.import_claude_modal.is_none()
+            && self.new_worktree_dialog.is_none()
+            && self.welcome_doc_viewer.is_none();
+        if !allow_iterm_inline_logo && crate::views::welcome::logo::reset_iterm2_inline_logo() {
+            // iTerm2's OSC 1337 image command has no delete primitive. A full
+            // clear removes the welcome image before a picker, modal, or agent
+            // view is drawn over the same cells.
+            let _ = terminal.clear();
+        }
         self.maybe_trigger_small_screen_tip();
         let compact = self.appearance.prompt.compact;
         let (header_pad_left, header_pad_right, header_pad_top) = {
@@ -3816,7 +3831,7 @@ impl AppView {
                             Vec::new();
                         if self.default_yolo {
                             flags_vec.push(crate::views::prompt_widget::PromptFlag {
-                                text: "always-approve",
+                                text: "始终批准",
                                 color: None,
                                 bold: false,
                             });
@@ -3855,6 +3870,7 @@ impl AppView {
                             },
                             cwd: &self.cwd,
                             auth_state: &self.auth_state,
+                            allow_iterm_inline_logo,
                             trust_state: &self.trust_state,
                             login_label: self.login_label.as_deref(),
                             auth_code_input: &self.auth_code_input,
@@ -4517,6 +4533,16 @@ impl AppView {
                     self.welcome_shimmer_frame = frame;
                     needs_redraw = true;
                 }
+            }
+        }
+        if matches!(
+            self.active_view,
+            ActiveView::Agent(_) | ActiveView::AgentDashboard
+        ) {
+            let frame = crate::views::welcome::shimmer_frame();
+            if frame != self.welcome_shimmer_frame {
+                self.welcome_shimmer_frame = frame;
+                needs_redraw = true;
             }
         }
         if matches!(self.active_view, ActiveView::AgentDashboard)

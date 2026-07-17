@@ -28,7 +28,7 @@ const LOGO_H_PAD: u16 = 3;
 /// message never paints over the button.
 const UPGRADE_CTA_ROWS: u16 = 2;
 
-const HERO_SUBTITLE: &str = "Thanks for trying Grok Build, give feedback with /feedback!";
+const HERO_SUBTITLE: &str = "感谢使用 DTTN-CLI，可通过 /feedback 提交反馈！";
 
 use super::{PROMPT_HEIGHT, VERSION_GAP};
 
@@ -298,6 +298,7 @@ pub(super) fn render_hero_box(
     layout: &WelcomeLayout,
     buf: &mut Buffer,
     theme: &Theme,
+    allow_iterm_inline_logo: bool,
     menu_items: &[(&str, &str)],
     selected: Option<usize>,
     mouse_pos: Option<(u16, u16)>,
@@ -317,6 +318,12 @@ pub(super) fn render_hero_box(
     border_block.render(layout.hero_box, buf);
 
     super::logo::render_full_logo(layout.hero_logo, buf, theme);
+    super::logo::prepare_iterm2_inline_logo_area(
+        layout.hero_logo,
+        buf,
+        theme,
+        allow_iterm_inline_logo,
+    );
 
     super::render_version_badge(
         layout.hero_version,
@@ -523,7 +530,7 @@ fn render_hero_changelog(
             .fg(theme.gray_bright)
             .add_modifier(Modifier::DIM),
     );
-    let title = "Changelog";
+    let title = "更新日志";
     buf.set_span(
         area.x,
         area.y,
@@ -539,7 +546,8 @@ fn render_hero_changelog(
         if row >= area.y + area.height {
             break;
         }
-        let truncated = crate::render::line_utils::truncate_str(bullet, max_text_width);
+        let localized = crate::views::ui_text::changelog_bullet(bullet);
+        let truncated = crate::render::line_utils::truncate_str(localized.as_ref(), max_text_width);
         let text = format!(" \u{2022} {truncated}");
         buf.set_span(area.x, row, &Span::styled(text, bullet_style), area.width);
     }

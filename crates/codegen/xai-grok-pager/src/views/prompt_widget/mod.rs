@@ -3377,10 +3377,10 @@ impl PromptWidget {
         // Trailing pad mirrors the leading pad above.
         left_spans.push(Span::styled(" ", pad_style));
 
-        // Build right-side spans: "multiline" indicator.
+        // Build right-side spans: localized "multiline" indicator.
         let mut right_spans: Vec<Span<'static>> = Vec::new();
         if info.multiline {
-            right_spans.push(Span::styled("multiline", flag_style));
+            right_spans.push(Span::styled("多行", flag_style));
         }
 
         if !right_spans.is_empty() {

@@ -327,6 +327,7 @@ fn restore_after_child(
             ..cur
         });
     }
+    crate::views::welcome::logo::reset_iterm2_inline_logo();
     let _ = terminal.clear();
 }
 
@@ -1860,6 +1861,7 @@ pub(crate) async fn run(
                         // Refocus heal wins over the resize debounce: a coalesced same-size
                         // resize wouldn't autoresize-clear, so clear + full repaint now.
                         resize_debounce_at = None;
+                        crate::views::welcome::logo::reset_iterm2_inline_logo();
                         let _ = terminal.clear();
                         app.draw(terminal);
                         last_draw_at = Instant::now();

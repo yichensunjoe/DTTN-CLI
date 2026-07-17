@@ -2148,15 +2148,15 @@ impl AgentView {
             };
             let plan_label: &str = if approval_is_commenting || casual_commenting {
                 commenting_label = match commenting_range {
-                    Some(r) if r.len() == 1 => format!("commenting L{}", r.start),
-                    Some(r) => format!("commenting L{}-{}", r.start, r.end - 1),
-                    None => "commenting".to_string(),
+                    Some(r) if r.len() == 1 => format!("评论中 L{}", r.start),
+                    Some(r) => format!("评论中 L{}-{}", r.start, r.end - 1),
+                    None => "评论中".to_string(),
                 };
                 commenting_label.as_str()
             } else if self.plan_approval_view.is_some() {
-                "plan approval"
+                "计划审批"
             } else {
-                "plan"
+                "计划"
             };
             mode_flags_vec.push(PromptFlag {
                 text: plan_label,
@@ -2166,14 +2166,14 @@ impl AgentView {
         }
         if self.session.is_yolo() && !effective_plan {
             mode_flags_vec.push(PromptFlag {
-                text: "always-approve",
+                text: "始终批准",
                 color: None,
                 bold: false,
             });
         }
         if self.auto_flag_visible(effective_plan) {
             mode_flags_vec.push(PromptFlag {
-                text: "auto",
+                text: "自动",
                 color: Some(theme.accent_system),
                 bold: false,
             });
@@ -2211,7 +2211,7 @@ impl AgentView {
             },
             PromptMode::EditingQueued { id, .. } => {
                 let pos = self.session.queue_position(*id).map(|i| i + 1).unwrap_or(1);
-                editing_label = format!("editing queued #{pos}");
+                editing_label = format!("编辑队列 #{pos}");
                 PromptInfo {
                     model_name: &editing_label,
                     flags: mode_flags,
@@ -4133,6 +4133,9 @@ impl AgentView {
             self.hit_goal_close.rect = close_rect;
             self.frame_occluder_rects.push(overlay_rect);
         }
+        // Last paint wins: keep the compact SPIC brand visible even in agent
+        // states that intentionally suppress the shortcuts widget.
+        crate::views::welcome::logo::render_spic_corner_logo(layout.shortcuts, buf, &theme);
         self.pane_areas = layout.pane_areas();
         {
             let route = crate::hyperlink_route::hyperlink_route();

@@ -452,6 +452,27 @@ pub fn render_iterm2_image(image_data: &[u8], cols: u16, rows: u16) -> String {
     )
 }
 
+/// Build an iTerm2 inline-image escape with human-readable transfer metadata.
+///
+/// iTerm2 uses the base64-encoded `name` and byte `size` in its first-use
+/// security prompt. Supplying both avoids the confusing “Unnamed file, 0
+/// bytes” message while preserving the same inline rendering behavior.
+pub fn render_iterm2_named_image(
+    image_data: &[u8],
+    filename: &str,
+    cols: u16,
+    rows: u16,
+) -> String {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let name = engine.encode(filename.as_bytes());
+    let b64 = engine.encode(image_data);
+    format!(
+        "\x1b]1337;File=name={name};size={size};inline=1;width={cols}cells;height={rows}cells;preserveAspectRatio=1:{b64}\x07",
+        size = image_data.len(),
+    )
+}
+
 // -------------------------------------------------------------------------
 // Shared overlay helpers
 // -------------------------------------------------------------------------

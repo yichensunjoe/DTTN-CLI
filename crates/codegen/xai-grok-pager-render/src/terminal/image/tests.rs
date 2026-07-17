@@ -84,6 +84,18 @@ fn iterm_escape_preserves_requested_geometry() {
 }
 
 #[test]
+fn named_iterm_escape_reports_filename_and_real_size() {
+    use base64::Engine as _;
+
+    let escape = render_iterm2_named_image(&[0u8; 10], "dttn-logo.png", 20, 4);
+    let encoded_name = base64::engine::general_purpose::STANDARD.encode("dttn-logo.png");
+    assert!(escape.contains(&format!("name={encoded_name}")));
+    assert!(escape.contains("size=10"));
+    assert!(escape.contains("width=20cells"));
+    assert!(escape.contains("height=4cells"));
+}
+
+#[test]
 fn low_level_overlay_separates_transmit_from_placement() {
     let png = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
     let protocol = GraphicsProtocol::Kitty;

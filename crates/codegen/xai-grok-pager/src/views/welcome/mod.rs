@@ -376,11 +376,11 @@ impl WelcomeLayout {
 
 /// Controls what the version badge renders.
 pub(super) enum VersionBadgeMode<'a> {
-    /// Full badge: team | tier | api_key | **Grok Build** VERSION+channel **Beta** (right-aligned).
+    /// Full badge: team | tier | api_key | **DTTN-CLI** VERSION+channel **测试版** (right-aligned).
     Full { subscription_tier: Option<&'a str> },
-    /// Hero footer: team | api_key | Grok Build Beta [channel] (right-aligned, gray).
+    /// Hero footer: team | api_key | DTTN-CLI 测试版 [channel] (right-aligned, gray).
     HeroFooter,
-    /// Hero inline: **Grok Build Beta**  VERSION (left-aligned).
+    /// Hero inline: **DTTN-CLI 测试版**  VERSION (left-aligned).
     HeroInline,
 }
 
@@ -419,14 +419,14 @@ pub(super) fn render_version_badge(
         } = &mode
     {
         spans.push(Span::styled(
-            format!("Tier: {tier}"),
+            format!("套餐：{tier}"),
             Style::default().fg(theme.gray),
         ));
         spans.push(sep.clone());
     }
     if show_api_key && is_api_key_auth {
         spans.push(Span::styled(
-            "Logged in with API key",
+            "已通过 API 密钥登录",
             Style::default().fg(theme.gray),
         ));
         spans.push(sep);
@@ -436,7 +436,7 @@ pub(super) fn render_version_badge(
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(
-                "Grok Build  ",
+                "DTTN-CLI  ",
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -446,7 +446,7 @@ pub(super) fn render_version_badge(
                 Style::default().fg(theme.gray),
             ));
             spans.push(Span::styled(
-                " Beta",
+                " 测试版",
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -454,7 +454,7 @@ pub(super) fn render_version_badge(
         }
         VersionBadgeMode::HeroFooter => {
             let channel_display = if channel.is_empty() {
-                "Beta"
+                "测试版"
             } else {
                 channel.trim()
             };
@@ -465,7 +465,7 @@ pub(super) fn render_version_badge(
         }
         VersionBadgeMode::HeroInline => {
             spans.push(Span::styled(
-                "Grok Build Beta  ",
+                "DTTN-CLI 测试版  ",
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -541,7 +541,7 @@ fn render_prompt_and_version(
             .add_modifier(Modifier::BOLD);
         let action_style = Style::default().fg(theme.gray);
         let key_text = pending.shortcut.display();
-        let label = format!("press again to {}", pending.label);
+        let label = crate::views::ui_text::confirmation(pending.label);
         let line = Line::from(vec![
             Span::styled(format!("  {key_text}"), key_style),
             Span::styled(":", action_style),
@@ -584,6 +584,9 @@ fn render_prompt_and_version(
 pub struct WelcomeRenderParams<'a> {
     pub prompt_focus: WelcomePromptFocus,
     pub auth_state: &'a AuthState,
+    /// Native iTerm2 may replace the SPIC character fallback with the supplied
+    /// transparent PNG while the unobscured authenticated welcome is visible.
+    pub allow_iterm_inline_logo: bool,
     /// Folder-trust state. When `Pending` (auth done, access granted), the
     /// welcome screen renders the trust question instead of the normal prompt.
     pub trust_state: &'a TrustState,
@@ -1541,7 +1544,7 @@ fn render_changelog_section(
             .fg(theme.gray_bright)
             .add_modifier(Modifier::DIM),
     );
-    let title = "Changelog";
+    let title = "更新日志";
     buf.set_span(
         centered.x,
         centered.y,
@@ -1556,7 +1559,8 @@ fn render_changelog_section(
         if row >= centered.y + centered.height {
             break;
         }
-        let truncated = crate::render::line_utils::truncate_str(bullet, max_text_width);
+        let localized = crate::views::ui_text::changelog_bullet(bullet);
+        let truncated = crate::render::line_utils::truncate_str(localized.as_ref(), max_text_width);
         let text = format!("\u{2022} {truncated}");
         buf.set_span(
             centered.x,
@@ -1706,7 +1710,7 @@ fn render_welcome_done(
     let gate_menu;
     let owned_menu;
     let menu_items: &[(&str, &str)] = if !p.has_access {
-        gate_menu = [(key_g, cta), (key_l, "Logout"), (key_q, "Quit")];
+        gate_menu = [(key_g, cta), (key_l, "退出登录"), (key_q, "退出")];
         &gate_menu
     } else {
         let (key_w, key_s, key_q, key_i_with_x) = (
@@ -1724,15 +1728,15 @@ fn render_welcome_done(
             // 3 cells of this row as dismiss instead of open. Keyboard:
             // ctrl-shift-i. The key string is right-aligned by render_menu,
             // so [x] sits at the very end of the row.
-            items.push((key_i_with_x, "Import Claude settings"));
+            items.push((key_i_with_x, "导入 Claude 设置"));
         }
-        items.push((key_w, "New worktree"));
-        items.push((key_s, "Resume session"));
+        items.push((key_w, "新建工作树"));
+        items.push((key_s, "恢复会话"));
         // "Changelog" above Quit; no shortcut — opened by click (row or block).
         if show_changelog_action {
-            items.push(("", "Changelog"));
+            items.push(("", "更新日志"));
         }
-        items.push((key_q, "Quit"));
+        items.push((key_q, "退出"));
         owned_menu = items;
         owned_menu.as_slice()
     };
@@ -1815,6 +1819,7 @@ fn render_welcome_done(
             &layout,
             buf,
             theme,
+            p.allow_iterm_inline_logo,
             menu_items,
             p.selected,
             p.mouse_pos,
@@ -1834,6 +1839,7 @@ fn render_welcome_done(
         // same as the input bar (`prompt_inset`) so it keeps side spacing
         // instead of touching the window edge on narrow terminals.
         render_logo(layout.logo, buf, theme, content_area.height);
+        logo::prepare_iterm2_inline_logo_area(layout.logo, buf, theme, p.allow_iterm_inline_logo);
         let menu_area = inset_horizontal(layout.menu, prompt::prompt_inset(p.compact));
         (
             render_menu(
@@ -1887,7 +1893,7 @@ fn render_welcome_done(
     // shortcuts are rendered inside the picker content area.
     let mut refresh_hit_rect: Option<Rect> = None;
     let mut gate_url_hit_rect: Option<Rect> = None;
-    let (cursor_pos, post_flush_escapes) = if show_picker {
+    let (cursor_pos, mut post_flush_escapes) = if show_picker {
         (None, None)
     } else if !p.has_access {
         // Show CTA message and version instead of the prompt.
@@ -2112,6 +2118,22 @@ fn render_welcome_done(
             layout.has_hero_box(),
         )
     };
+
+    let inline_logo_area = if layout.has_hero_box() {
+        layout.hero_logo
+    } else {
+        layout.logo
+    };
+    if let Some(inline_logo) = logo::iterm2_inline_logo_post_flush(
+        inline_logo_area,
+        content_area,
+        p.allow_iterm_inline_logo,
+    ) {
+        match post_flush_escapes.as_mut() {
+            Some(existing) => existing.append(inline_logo),
+            None => post_flush_escapes = Some(inline_logo),
+        }
+    }
 
     WelcomeRenderResult {
         cursor_pos,
@@ -2533,6 +2555,7 @@ mod tests {
         WelcomeRenderParams {
             prompt_focus: WelcomePromptFocus::Unfocused,
             auth_state,
+            allow_iterm_inline_logo: false,
             trust_state,
             login_label: None,
             auth_code_input: "",

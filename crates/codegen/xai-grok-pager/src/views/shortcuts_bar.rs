@@ -168,6 +168,21 @@ impl Widget for ShortcutsBar<'_> {
             }
         }
 
+        // Keep the DTTN-CLI SPIC mark permanently visible on the right while
+        // reserving a one-column gap so shortcut labels never paint over it.
+        let brand_width = crate::views::welcome::logo::spic_corner_logo_width(area.width);
+        let brand_reserve = if brand_width > 0 {
+            brand_width.saturating_add(1)
+        } else {
+            0
+        };
+        let content_area = Rect {
+            width: area.width.saturating_sub(brand_reserve),
+            ..area
+        };
+        let content_right = content_area.x + content_area.width;
+        crate::views::welcome::logo::render_spic_corner_logo(area, buf, &theme);
+
         let key_style = Style::default()
             .fg(theme.text_secondary)
             .bg(theme.bg_base)
@@ -181,9 +196,9 @@ impl Widget for ShortcutsBar<'_> {
         // If pending confirmation, show only "press again to {label}"
         if let Some(pending) = &self.pending_confirmation {
             let key_text = pending.shortcut.display();
-            let label = format!("press again to {}", pending.label);
+            let label = crate::views::ui_text::confirmation(pending.label);
 
-            let mut x = area.x;
+            let mut x = content_area.x;
 
             let key_span = Span::styled(&key_text, key_style);
             let key_width = key_text.width() as u16;
@@ -196,8 +211,14 @@ impl Widget for ShortcutsBar<'_> {
 
             let action_span = Span::styled(&label, action_style);
             let action_width = label.width() as u16;
-            buf.set_span(x, area.y, &action_span, action_width);
+            buf.set_span(
+                x,
+                area.y,
+                &action_span,
+                action_width.min(content_right.saturating_sub(x)),
+            );
             let _ = x + action_width; // suppress unused
+            crate::views::welcome::logo::render_spic_corner_logo(area, buf, &theme);
             return;
         }
 
@@ -207,7 +228,7 @@ impl Widget for ShortcutsBar<'_> {
             .add_modifier(Modifier::DIM)
             .remove_modifier(Modifier::BOLD);
 
-        let mut x = area.x;
+        let mut x = content_area.x;
 
         // Build the effective hint list (compact-aware).
         let effective = compute_effective_hints(self.hints, self.compact.as_ref());
@@ -216,7 +237,7 @@ impl Widget for ShortcutsBar<'_> {
             if i > 0 {
                 let sep = Span::styled("  │  ", sep_style);
                 let sep_width = 5u16;
-                if x + sep_width > area.x + area.width {
+                if x + sep_width > content_right {
                     break;
                 }
                 buf.set_span(x, area.y, &sep, sep_width);
@@ -226,22 +247,23 @@ impl Widget for ShortcutsBar<'_> {
             let key_text = hint.key_display();
             let key_span = Span::styled(&key_text, key_style);
             let key_width = key_text.width() as u16;
-            if x + key_width > area.x + area.width {
+            if x + key_width > content_right {
                 break;
             }
             buf.set_span(x, area.y, &key_span, key_width);
             x += key_width;
 
             let colon = Span::styled(":", action_style);
-            if x + 1 > area.x + area.width {
+            if x + 1 > content_right {
                 break;
             }
             buf.set_span(x, area.y, &colon, 1);
             x += 1;
 
-            let action_span = Span::styled(hint.label.as_ref(), action_style);
-            let action_width = hint.label.width() as u16;
-            if x + action_width > area.x + area.width {
+            let translated_label = crate::views::ui_text::hint_label(hint.label.as_ref());
+            let action_span = Span::styled(translated_label.as_ref(), action_style);
+            let action_width = translated_label.width() as u16;
+            if x + action_width > content_right {
                 break;
             }
             buf.set_span(x, area.y, &action_span, action_width);
@@ -253,14 +275,15 @@ impl Widget for ShortcutsBar<'_> {
             let right_style = Style::default().fg(theme.gray).bg(theme.bg_base);
             let display = format!("{text} ");
             let rw = display.width() as u16;
-            if rw > 0 && rw < area.width {
-                let rx = area.x + area.width.saturating_sub(rw);
+            if rw > 0 && rw < content_area.width {
+                let rx = content_right.saturating_sub(rw);
                 if rx > x + 1 {
                     let right_span = Span::styled(display, right_style);
                     buf.set_span(rx, area.y, &right_span, rw);
                 }
             }
         }
+        crate::views::welcome::logo::render_spic_corner_logo(area, buf, &theme);
     }
 }
 

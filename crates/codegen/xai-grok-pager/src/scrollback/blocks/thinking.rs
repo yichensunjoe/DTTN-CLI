@@ -151,11 +151,11 @@ impl ThinkingBlock {
         self.elapsed_time_ms.map(|ms| {
             let secs = ms as f64 / 1000.0;
             if secs < 60.0 {
-                format!("{:.1}s", secs)
+                format!("{:.1}秒", secs)
             } else {
                 let mins = (secs / 60.0).floor() as u32;
                 let remaining = secs - (mins as f64 * 60.0);
-                format!("{}m{:.0}s", mins, remaining)
+                format!("{}分{:.0}秒", mins, remaining)
             }
         })
     }
@@ -186,14 +186,14 @@ impl ThinkingBlock {
         let detail_style = theme.muted();
 
         if ctx.is_running {
-            Line::from(Span::styled("Thinking…", label_style))
+            Line::from(Span::styled("思考中…", label_style))
         } else if let Some(time_str) = self.format_time() {
             Line::from(vec![
-                Span::styled("Thought", label_style),
-                Span::styled(format!(" for {time_str}"), detail_style),
+                Span::styled("思考了", label_style),
+                Span::styled(time_str, detail_style),
             ])
         } else {
-            Line::from(Span::styled("Thought", label_style))
+            Line::from(Span::styled("思考", label_style))
         }
     }
 
