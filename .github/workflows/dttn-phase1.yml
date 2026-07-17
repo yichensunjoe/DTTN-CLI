@@ -1,3 +1,4 @@
+# Phase 2 bootstrap trigger: remove after the migration commit is verified.
 name: DTTN Phase 1
 
 on:
