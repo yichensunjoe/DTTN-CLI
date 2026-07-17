@@ -1,4 +1,4 @@
-name: DTTN Phase 3 Migration
+name: DTTN Phase 3 Validation
 
 on:
   pull_request:
@@ -9,19 +9,14 @@ permissions:
   contents: read
 
 jobs:
-  migrate-provider-layer:
-    if: >-
-      github.head_ref == 'refactor/dttn-model-provider-phase-3' &&
-      github.actor != 'github-actions[bot]'
+  validate-provider-layer:
+    if: github.head_ref == 'refactor/dttn-model-provider-phase-3'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: write
     steps:
-      - name: Checkout migration branch
+      - name: Checkout branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - name: Install protoc
@@ -29,47 +24,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes protobuf-compiler
 
-      - name: Apply deterministic migration
-        shell: bash
-        run: |
-          set -o pipefail
-          python scripts/apply_dttn_phase3_shell.py 2>&1 | tee phase3-migration.log
-
-      - name: Format and validate provider layer
+      - name: Validate provider compatibility layer
         shell: bash
         run: |
           set -o pipefail
           {
-            mapfile -t changed_rust < <(git diff --name-only --diff-filter=ACM -- '*.rs')
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            mapfile -t changed_rust < <(
+              git diff --name-only --diff-filter=ACM \
+                "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
+            )
             if (( ${#changed_rust[@]} > 0 )); then
-              rustfmt --edition 2024 "${changed_rust[@]}"
+              rustfmt --edition 2024 --check "${changed_rust[@]}"
             fi
             cargo test -p xai-grok-sampling-types
             cargo test -p xai-grok-sampler
+            cargo test -p xai-grok-sampler --test provider_extensions
             cargo check -p xai-grok-shell
-            git diff --check
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
           } 2>&1 | tee phase3-validation.log
 
-      - name: Upload migration diagnostics
+      - name: Upload validation diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dttn-phase3-migration-diagnostics
-          path: |
-            phase3-migration.log
-            phase3-validation.log
+          name: dttn-phase3-validation-diagnostics
+          path: phase3-validation.log
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Commit migration result
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "Phase 3 migration produced no changes"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/codegen
-          git commit -m "refactor: separate standard and xAI provider extensions"
-          git push origin HEAD:${{ github.head_ref }}
