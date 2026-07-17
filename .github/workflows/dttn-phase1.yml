@@ -1,4 +1,4 @@
-name: DTTN Phase 1
+name: DTTN Core Validation
 
 on:
   pull_request:
@@ -32,6 +32,9 @@ jobs:
 
       - name: Validate DTTN distribution boundary
         run: python scripts/check_dttn_phase1.py
+
+      - name: Validate DTTN runtime boundary
+        run: python scripts/check_dttn_phase2.py
 
       - name: Test embedded model defaults
         run: cargo test -p xai-grok-models
@@ -68,69 +71,3 @@ jobs:
           path: cargo-check.log
           if-no-files-found: error
           retention-days: 7
-
-  phase2-migration:
-    name: Apply DTTN Phase 2 migration
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.head_ref == 'refactor/dttn-core-phase-1' &&
-      github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout migration branch
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Apply deterministic migration
-        shell: bash
-        run: |
-          set -o pipefail
-          python scripts/apply_dttn_phase2.py 2>&1 | tee phase2-migration.log
-
-      - name: Upload migration log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dttn-phase2-migration-log
-          path: phase2-migration.log
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Validate migration output
-        shell: bash
-        run: |
-          set -o pipefail
-          {
-            python scripts/check_dttn_phase1.py
-            python scripts/check_dttn_phase2.py
-            git diff --check
-          } 2>&1 | tee phase2-validation.log
-
-      - name: Upload validation log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dttn-phase2-validation-log
-          path: phase2-validation.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Commit migration result
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "Phase 2 migration produced no changes"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/codegen/xai-grok-shell/src/agent/config.rs
-          git add crates/codegen/xai-grok-pager-bin/src/main.rs
-          git commit -m "refactor: migrate DTTN runtime identifiers"
-          git push origin HEAD:${{ github.head_ref }}
