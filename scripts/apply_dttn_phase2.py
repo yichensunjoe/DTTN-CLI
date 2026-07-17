@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Apply the deterministic DTTN Phase 2 runtime-identifier migration.
 
-The script is intentionally strict: every source replacement must match exactly
-once. A source drift aborts the migration instead of producing a partial edit.
+The script is intentionally strict: every source replacement declares its
+expected occurrence count. Source drift aborts instead of producing a partial
+edit.
 """
 
 from __future__ import annotations
@@ -12,15 +13,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def replace_once(path: str, old: str, new: str) -> bool:
+def replace_exact_count(path: str, old: str, new: str, expected: int = 1) -> bool:
     target = ROOT / path
     text = target.read_text(encoding="utf-8")
     count = text.count(old)
-    if count == 0 and new in text:
+    if count == 0 and text.count(new) >= expected:
         return False
-    if count != 1:
-        raise RuntimeError(f"{path}: expected exactly one match, found {count}: {old!r}")
-    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+    if count != expected:
+        raise RuntimeError(
+            f"{path}: expected {expected} match(es), found {count}: {old!r}"
+        )
+    target.write_text(text.replace(old, new), encoding="utf-8")
     return True
 
 
@@ -170,7 +173,7 @@ pub use xai_grok_config::env_bool;''',
     ]
 
     for old, new in replacements:
-        replace_once(path, old, new)
+        replace_exact_count(path, old, new)
 
 
 def apply_main() -> None:
@@ -185,12 +188,7 @@ def apply_main() -> None:
         ('export GROK_DEPLOYMENT_KEY=<your-key>', 'export DTTN_DEPLOYMENT_KEY=<your-key>'),
         ('$env:GROK_DEPLOYMENT_KEY=\\"<your-key>\\"', '$env:DTTN_DEPLOYMENT_KEY=\\"<your-key>\\"'),
         ('eprintln!("  grok setup");', 'eprintln!("  dttn setup");'),
-        ('~/.grok/config.toml', '~/.dttn/config.toml'),
         ("contact your organization's Grok administrator", "contact your organization's DTTN administrator"),
-        (
-            "Your team doesn't have a managed configuration yet. A team admin can set one up at console.x.ai.",
-            "Your team doesn't have a managed configuration yet. Contact your DTTN administrator.",
-        ),
         ('PID {pid} is not a grok process', 'PID {pid} is not a DTTN process'),
         ('"grok-pager-leader-cli"', '"dttn-leader-cli"'),
         ('/// Env override for the `grok workspace` gate:', '/// Env override for the `dttn workspace` gate:'),
@@ -199,7 +197,6 @@ def apply_main() -> None:
         ('`grok workspace` is not enabled', '`dttn workspace` is not enabled'),
         ('settings for `grok workspace`', 'settings for `dttn workspace`'),
         ('run `grok login`', 'run `dttn login`'),
-        ('"grok-workspace-cli"', '"dttn-workspace-cli"'),
         ('Start a grok session, or run `grok workspace start`.', 'Start a DTTN session, or run `dttn workspace start`.'),
         ('`grok workspace` requires leader mode', '`dttn workspace` requires leader mode'),
         ('No cached credentials found. Run `grok login` first.', 'No cached credentials found. Run `dttn login` first.'),
@@ -223,7 +220,16 @@ def apply_main() -> None:
     ]
 
     for old, new in replacements:
-        replace_once(path, old, new)
+        replace_exact_count(path, old, new)
+
+    replace_exact_count(path, '~/.grok/config.toml', '~/.dttn/config.toml', expected=3)
+    replace_exact_count(
+        path,
+        "Your team doesn't have a managed configuration yet. A team admin can set one up at console.x.ai.",
+        "Your team doesn't have a managed configuration yet. Contact your DTTN administrator.",
+        expected=2,
+    )
+    replace_exact_count(path, '"grok-workspace-cli"', '"dttn-workspace-cli"', expected=2)
 
 
 if __name__ == "__main__":
