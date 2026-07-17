@@ -88,7 +88,19 @@ jobs:
           fetch-depth: 0
 
       - name: Apply deterministic migration
-        run: python scripts/apply_dttn_phase2.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/apply_dttn_phase2.py 2>&1 | tee phase2-migration.log
+
+      - name: Upload migration log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dttn-phase2-migration-log
+          path: phase2-migration.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Validate migration output
         run: |
