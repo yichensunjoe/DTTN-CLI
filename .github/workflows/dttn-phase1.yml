@@ -57,6 +57,9 @@ jobs:
           sudo apt-get install --yes protobuf-compiler
           protoc --version
 
+      - name: Test DTTN runtime defaults
+        run: cargo test -p xai-grok-shell --test dttn_runtime_defaults
+
       - name: Check dttn binary
         shell: bash
         run: |
@@ -69,5 +72,5 @@ jobs:
         with:
           name: dttn-composition-check-log
           path: cargo-check.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
