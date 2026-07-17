@@ -1,9 +1,6 @@
-name: DTTN Phase 3 Inspect
+name: DTTN Phase 3 Migration
 
 on:
-  push:
-    branches:
-      - refactor/dttn-model-provider-phase-3
   pull_request:
     branches:
       - refactor/dttn-core-phase-1
@@ -12,53 +9,64 @@ permissions:
   contents: read
 
 jobs:
-  inspect-model-pipeline:
+  migrate-provider-layer:
+    if: >-
+      github.head_ref == 'refactor/dttn-model-provider-phase-3' &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
-      - name: Extract model pipeline contexts
+      - name: Checkout migration branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Apply deterministic migration
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
+          set -o pipefail
+          python scripts/apply_dttn_phase3.py 2>&1 | tee phase3-migration.log
 
-          terms = (
-              "ConfigModelOverride",
-              "ModelEntryConfig",
-              "resolve_model_to_sampling_config",
-              "SamplerConfig {",
-              "SamplingConfig {",
-              "stream_tool_calls",
-              "supported_in_api",
-              "GrokRequestHeaders",
-              "create_response_stream",
-              "chat_completion_stream",
-          )
-          roots = [Path("crates/codegen")]
-          out = []
-          for root in roots:
-              for path in sorted(root.rglob("*.rs")):
-                  lines = path.read_text(encoding="utf-8").splitlines()
-                  hits = [i for i, line in enumerate(lines) if any(term in line for term in terms)]
-                  if not hits:
-                      continue
-                  out.append(f"\n===== {path} =====")
-                  emitted = set()
-                  for hit in hits:
-                      start = max(0, hit - 10)
-                      end = min(len(lines), hit + 21)
-                      key = (start, end)
-                      if key in emitted:
-                          continue
-                      emitted.add(key)
-                      out.append(f"--- lines {start + 1}-{end} ---")
-                      out.extend(f"{idx + 1:05d}: {lines[idx]}" for idx in range(start, end))
-          Path("phase3-inspect.txt").write_text("\n".join(out), encoding="utf-8")
-          PY
-      - uses: actions/upload-artifact@v4
+      - name: Format and validate provider layer
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            cargo fmt --all -- --check
+            cargo test -p xai-grok-sampling-types
+            cargo test -p xai-grok-sampler
+            cargo check -p xai-grok-shell
+            git diff --check
+          } 2>&1 | tee phase3-validation.log
+
+      - name: Upload migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: phase3-model-pipeline-inspect
-          path: phase3-inspect.txt
-          if-no-files-found: error
+          name: dttn-phase3-migration-diagnostics
+          path: |
+            phase3-migration.log
+            phase3-validation.log
+          if-no-files-found: warn
           retention-days: 7
+
+      - name: Commit migration result
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Phase 3 migration produced no changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/codegen
+          git commit -m "refactor: separate standard and xAI provider extensions"
+          git push origin HEAD:${{ github.head_ref }}
