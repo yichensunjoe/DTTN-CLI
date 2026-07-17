@@ -1,4 +1,4 @@
-//! Environment helpers for benchmarking and testing.
+//! Environment helpers for DTTN PTY benchmarks and tests.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -23,13 +23,13 @@ fn target_dir() -> Result<PathBuf> {
         }))
 }
 
-fn local_pager_binary_path() -> Result<PathBuf> {
+fn local_dttn_binary_path() -> Result<PathBuf> {
     Ok(target_dir()?
         .join("debug")
-        .join(format!("xai-grok-pager{}", std::env::consts::EXE_SUFFIX)))
+        .join(format!("dttn{}", std::env::consts::EXE_SUFFIX)))
 }
 
-fn ensure_local_pager_binary(binary: &std::path::Path) -> Result<()> {
+fn ensure_local_dttn_binary(binary: &std::path::Path) -> Result<()> {
     if binary.exists() {
         return Ok(());
     }
@@ -42,18 +42,18 @@ fn ensure_local_pager_binary(binary: &std::path::Path) -> Result<()> {
             "-p",
             "xai-grok-pager-bin",
             "--bin",
-            "xai-grok-pager",
+            "dttn",
         ])
         .stdin(Stdio::null())
         .envs(xai_tty_utils::pager_env());
     xai_tty_utils::detach_std_command(&mut cmd);
     let output = cmd
         .output()
-        .with_context(|| format!("failed to spawn {cargo} to build xai-grok-pager"))?;
+        .with_context(|| format!("failed to spawn {cargo} to build dttn"))?;
 
     if !output.status.success() {
         bail!(
-            "failed to build xai-grok-pager (exit {:?})\nstdout:\n{}\nstderr:\n{}",
+            "failed to build dttn (exit {:?})\nstdout:\n{}\nstderr:\n{}",
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
@@ -61,40 +61,42 @@ fn ensure_local_pager_binary(binary: &std::path::Path) -> Result<()> {
     }
     if !binary.exists() {
         bail!(
-            "xai-grok-pager build completed but binary missing at {}",
+            "dttn build completed but binary missing at {}",
             binary.display()
         );
     }
     Ok(())
 }
 
-/// Resolve the pager binary path.
+/// Resolve the DTTN binary path.
 ///
 /// Resolution order:
-/// 1. `PAGER_BINARY` env var (for CI / explicit override)
-/// 2. `CARGO_BIN_EXE_xai-grok-pager` (set by `cargo test`)
-/// 3. Build locally via `cargo build -p xai-grok-pager-bin` (the composition-
-///    root package that owns the `xai-grok-pager` binary)
+/// 1. `DTTN_BINARY` environment variable
+/// 2. `PAGER_BINARY` compatibility environment variable
+/// 3. `CARGO_BIN_EXE_dttn`, set by `cargo test`
+/// 4. Build the composition-root package locally
 pub fn pager_binary() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("PAGER_BINARY") {
-        let p = PathBuf::from(path);
-        if !p.exists() {
-            bail!("PAGER_BINARY does not exist: {}", p.display());
+    for variable in ["DTTN_BINARY", "PAGER_BINARY"] {
+        if let Ok(path) = std::env::var(variable) {
+            let p = PathBuf::from(path);
+            if !p.exists() {
+                bail!("{variable} does not exist: {}", p.display());
+            }
+            // Bazel may provide a runfiles-relative path; portable_pty resolves
+            // non-absolute paths through PATH instead of the current directory.
+            return std::path::absolute(&p)
+                .with_context(|| format!("failed to absolutize {variable}: {}", p.display()));
         }
-        // Bazel sets PAGER_BINARY to a runfiles-relative path; portable_pty
-        // resolves non-absolute paths via PATH lookup instead of the cwd.
-        return std::path::absolute(&p)
-            .with_context(|| format!("failed to absolutize PAGER_BINARY: {}", p.display()));
     }
 
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_xai-grok-pager") {
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_dttn") {
         let p = PathBuf::from(path);
         if p.exists() {
             return Ok(p);
         }
     }
 
-    let binary = local_pager_binary_path()?;
-    ensure_local_pager_binary(&binary)?;
+    let binary = local_dttn_binary_path()?;
+    ensure_local_dttn_binary(&binary)?;
     Ok(binary)
 }
