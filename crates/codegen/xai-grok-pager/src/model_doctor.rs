@@ -138,7 +138,7 @@ async fn run_model_doctor(args: ModelDoctorArgs) -> Result<()> {
     let raw = xai_grok_shell::config::load_effective_config_disk_only()
         .context("failed to load effective DTTN configuration")?;
     let agent_config = AgentConfig::new_from_toml_cfg(&raw)
-        .context("failed to parse effective DTTN configuration")?;
+        .map_err(|error| anyhow!("failed to parse effective DTTN configuration: {error}"))?;
     let models = resolve_model_list(&agent_config, None);
 
     let selected = args
@@ -194,7 +194,9 @@ async fn run_model_doctor(args: ModelDoctorArgs) -> Result<()> {
         );
     }
 
-    let configuration_error = SamplingClient::new(sampler.clone()).err().map(|error| error.to_string());
+    let configuration_error = SamplingClient::new(sampler.clone())
+        .err()
+        .map(|error| error.to_string());
     if let Some(error) = &configuration_error {
         warnings.push(format!("sampler configuration rejected: {error}"));
     }
@@ -327,7 +329,10 @@ async fn run_probe(
                 text_non_empty: false,
                 contract_match: false,
                 tool_calls: Vec::new(),
-                error: Some(format!("probe timed out after {} seconds", timeout.as_secs())),
+                error: Some(format!(
+                    "probe timed out after {} seconds",
+                    timeout.as_secs()
+                )),
             }
         }
         Ok(Err(error)) => ProbeReport {
@@ -369,7 +374,8 @@ async fn run_probe(
                 text_non_empty: !text.trim().is_empty(),
                 contract_match,
                 tool_calls,
-                error: (!contract_match).then(|| "provider response did not satisfy the probe contract".to_string()),
+                error: (!contract_match)
+                    .then(|| "provider response did not satisfy the probe contract".to_string()),
             }
         }
     }

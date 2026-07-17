@@ -1653,6 +1653,9 @@ fn main() {
 }
 async fn async_main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if xai_grok_pager::model_doctor::try_run_from_env().await? {
+        return Ok(());
+    }
     let mut args = PagerArgs::parse_and_apply_cwd()?;
     if let Some(ref mode) = args.compaction_mode {
         unsafe { std::env::set_var("GROK_COMPACTION_MODE", mode) };

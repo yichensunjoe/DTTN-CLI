@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::Router;
 use axum::extract::Json;
 use axum::response::sse::{Event, Sse};
 use axum::routing::post;
-use axum::Router;
 use futures_util::stream;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -288,9 +288,7 @@ async fn standard_responses_accepts_tool_result_on_followup_turn() {
                     sse::responses_api_events("tool result accepted", "test-model")
                 };
                 Sse::new(stream::iter(
-                    events
-                        .into_iter()
-                        .map(Ok::<_, std::convert::Infallible>),
+                    events.into_iter().map(Ok::<_, std::convert::Infallible>),
                 ))
             }
         }),

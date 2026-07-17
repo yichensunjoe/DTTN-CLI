@@ -7,21 +7,21 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::Router;
 use axum::extract::Json;
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, Sse};
 use axum::routing::post;
-use axum::Router;
 use futures_util::stream;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use xai_grok_sampler::{ApiBackend, RetryPolicy, SamplerActor, SamplerConfig, SamplingClient};
 use xai_grok_sampling_types::{
-    CompactionAtTokens, ContentPart, ConversationItem, ConversationRequest,
-    ConversationToolChoice, DoomLoopRecoveryPolicy, ProviderExtensions, ToolSpec, UserItem,
+    CompactionAtTokens, ContentPart, ConversationItem, ConversationRequest, ConversationToolChoice,
+    DoomLoopRecoveryPolicy, ProviderExtensions, ToolSpec, UserItem,
 };
 use xai_grok_test_support::sse;
 
@@ -200,7 +200,10 @@ async fn standard_provider_sends_no_x_grok_headers() {
         post(move |headers: HeaderMap, Json(body): Json<Value>| {
             let captured = Arc::clone(&captured_handler);
             async move {
-                captured.lock().unwrap().push(CapturedRequest { headers, body });
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(CapturedRequest { headers, body });
                 Sse::new(stream::iter(
                     sse::chat_completion_events("ok", "test-model")
                         .into_iter()
@@ -256,7 +259,10 @@ async fn xai_provider_preserves_private_tracking_headers() {
         post(move |headers: HeaderMap, Json(body): Json<Value>| {
             let captured = Arc::clone(&captured_handler);
             async move {
-                captured.lock().unwrap().push(CapturedRequest { headers, body });
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(CapturedRequest { headers, body });
                 Sse::new(stream::iter(
                     sse::chat_completion_events("ok", "test-model")
                         .into_iter()
@@ -280,7 +286,10 @@ async fn xai_provider_preserves_private_tracking_headers() {
 
     let captured = captured.lock().unwrap();
     let headers = &captured.first().expect("request captured").headers;
-    assert_eq!(headers.get("x-grok-client-identifier").unwrap(), "dttn-contract-test");
+    assert_eq!(
+        headers.get("x-grok-client-identifier").unwrap(),
+        "dttn-contract-test"
+    );
     assert_eq!(headers.get("x-grok-client-version").unwrap(), "0.0-test");
     assert_eq!(headers.get("x-grok-conv-id").unwrap(), "conv-test");
     assert_eq!(headers.get("x-grok-req-id").unwrap(), "req-test");
@@ -324,7 +333,8 @@ fn standard_provider_rejects_private_capabilities_before_network_io() {
     cases.push(("xAI private headers", private_header));
 
     for (expected, cfg) in cases {
-        let error = SamplingClient::new(cfg).expect_err("standard provider must reject private mode");
+        let error =
+            SamplingClient::new(cfg).expect_err("standard provider must reject private mode");
         assert!(
             error.to_string().contains(expected),
             "expected {expected:?} in {error}"
@@ -341,7 +351,10 @@ async fn standard_chat_stream_reassembles_tool_call_arguments() {
         post(move |headers: HeaderMap, Json(body): Json<Value>| {
             let captured = Arc::clone(&captured_handler);
             async move {
-                captured.lock().unwrap().push(CapturedRequest { headers, body });
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(CapturedRequest { headers, body });
                 Sse::new(stream::iter(
                     chat_tool_call_events()
                         .into_iter()
@@ -378,7 +391,10 @@ async fn standard_chat_stream_reassembles_tool_call_arguments() {
     let assistant = response.assistant().expect("assistant response");
     assert_eq!(assistant.tool_calls.len(), 1);
     assert_eq!(assistant.tool_calls[0].name, "read_file");
-    assert_eq!(assistant.tool_calls[0].arguments.as_ref(), "{\"path\":\"README.md\"}");
+    assert_eq!(
+        assistant.tool_calls[0].arguments.as_ref(),
+        "{\"path\":\"README.md\"}"
+    );
 
     let captured = captured.lock().unwrap();
     let body = &captured.first().expect("request captured").body;
@@ -395,7 +411,10 @@ async fn standard_responses_stream_works_without_private_fields() {
         post(move |headers: HeaderMap, Json(body): Json<Value>| {
             let captured = Arc::clone(&captured_handler);
             async move {
-                captured.lock().unwrap().push(CapturedRequest { headers, body });
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(CapturedRequest { headers, body });
                 Sse::new(stream::iter(
                     sse::responses_api_events("responses ok", "test-model")
                         .into_iter()
