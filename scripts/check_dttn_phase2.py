@@ -20,9 +20,9 @@ def main() -> int:
     config = read(config_path)
     required_config = (
         'pub const DEFAULT_AGENT_TYPE: &str = "dttn-code-agent";',
-        '"https://gateway.dttn.invalid/v1"',
-        '"https://inference.dttn.invalid/v1"',
-        '"https://assets.dttn.invalid"',
+        'pub const CLI_CHAT_PROXY_BASE_URL_DEFAULT: &str = "https://gateway.dttn.invalid/v1";',
+        'pub const XAI_API_BASE_URL_DEFAULT: &str = "https://inference.dttn.invalid/v1";',
+        'pub const ASSET_SERVER_URL_DEFAULT: &str = "https://assets.dttn.invalid";',
         '"DTTN_GATEWAY_BASE_URL"',
         '"DTTN_INFERENCE_BASE_URL"',
         '"DTTN_MODELS_BASE_URL"',
@@ -35,14 +35,15 @@ def main() -> int:
         if marker not in config:
             errors.append(f"{config_path}: missing {marker}")
 
-    for forbidden in (
-        "https://cli-chat-proxy.grok.com",
-        "https://api.x.ai",
-        "https://assets.grok.com",
-        'DEFAULT_AGENT_TYPE: &str = "grok-build-plan"',
-    ):
-        if forbidden in config:
-            errors.append(f"{config_path}: forbidden runtime default {forbidden!r}")
+    forbidden_default_assignments = (
+        'pub const CLI_CHAT_PROXY_BASE_URL_DEFAULT: &str = "https://cli-chat-proxy.grok.com/v1";',
+        'pub const XAI_API_BASE_URL_DEFAULT: &str = "https://api.x.ai/v1";',
+        'pub const ASSET_SERVER_URL_DEFAULT: &str = "https://assets.grok.com";',
+        'pub const DEFAULT_AGENT_TYPE: &str = "grok-build-plan";',
+    )
+    for marker in forbidden_default_assignments:
+        if marker in config:
+            errors.append(f"{config_path}: forbidden runtime default assignment {marker!r}")
 
     main_path = "crates/codegen/xai-grok-pager-bin/src/main.rs"
     main_rs = read(main_path)
