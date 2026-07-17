@@ -7,6 +7,10 @@ on:
       - main
       - "refactor/**"
 
+concurrency:
+  group: dttn-core-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
