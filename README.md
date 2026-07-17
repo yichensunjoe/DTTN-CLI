@@ -49,7 +49,7 @@ session_summary   = agnes-2.0-flash
 cargo run --bin dttn
 cargo build --release --bin dttn
 cargo check --bin dttn
-cargo test -p xai-grok-models
+python scripts/check_dttn_phase1.py
 cargo fmt --all
 ```
 
