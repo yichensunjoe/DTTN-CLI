@@ -10,6 +10,7 @@ pub mod conversation;
 pub mod doom_loop;
 pub mod error;
 pub mod messages;
+pub mod model_catalog;
 pub mod serde_helpers;
 pub mod types;
 
@@ -22,6 +23,7 @@ pub use self::error::{
     EmptyReason, EmptyResponseContext, ResponseModelMetadata, Result, SamplingError,
     is_context_length_error,
 };
+pub use self::model_catalog::*;
 pub use self::types::*;
 
 // Re-export async-openai crate Responses API types under `rs` namespace
