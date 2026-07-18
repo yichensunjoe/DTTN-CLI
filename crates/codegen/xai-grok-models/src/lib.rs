@@ -77,7 +77,10 @@ mod tests {
     fn distribution_defaults_resolve_to_agnes() {
         assert_eq!(default_model(), DISTRIBUTION_DEFAULT_MODEL);
         assert_eq!(default_web_search_model(), DISTRIBUTION_DEFAULT_MODEL);
-        assert_eq!(default_image_description_model(), DISTRIBUTION_DEFAULT_MODEL);
+        assert_eq!(
+            default_image_description_model(),
+            DISTRIBUTION_DEFAULT_MODEL
+        );
         assert_eq!(default_session_summary_model(), DISTRIBUTION_DEFAULT_MODEL);
     }
 
