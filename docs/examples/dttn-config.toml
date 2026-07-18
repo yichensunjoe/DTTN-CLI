@@ -21,7 +21,9 @@ max_retries = 3
 inference_idle_timeout_secs = 120
 
 [endpoints]
-# OpenAI Responses 兼容的推理服务根地址。
+# OpenAI Chat Completions 兼容的推理服务根地址。
+# Agnes 官方公共 API 使用 https://apihub.agnes-ai.com/v1；企业部署应替换为
+# 公司批准的网关或私有代理地址，避免在配置模板中硬编码第三方生产 Endpoint。
 models_base_url = "https://models.example.internal/v1"
 
 # 模型目录接口。未设置时默认使用 `${models_base_url}/models`。
