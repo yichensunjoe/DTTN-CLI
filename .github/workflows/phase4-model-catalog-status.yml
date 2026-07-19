@@ -3,7 +3,7 @@ name: DTTN Phase 4 Model Catalog Validation
 on:
   pull_request:
     branches:
-      - refactor/dttn-model-provider-phase-3
+      - main
 
 concurrency:
   group: dttn-phase4-${{ github.event.pull_request.number }}
