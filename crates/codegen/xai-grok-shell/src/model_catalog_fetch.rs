@@ -69,7 +69,8 @@ pub struct CatalogFetchRequest {
 
 impl fmt::Debug for CatalogFetchRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let endpoint = catalog_origin(&self.endpoint).unwrap_or_else(|_| "<invalid-url>".to_string());
+        let endpoint =
+            catalog_origin(&self.endpoint).unwrap_or_else(|_| "<invalid-url>".to_string());
         formatter
             .debug_struct("CatalogFetchRequest")
             .field("endpoint", &endpoint)
