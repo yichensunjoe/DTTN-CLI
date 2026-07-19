@@ -49,7 +49,33 @@ jobs:
                   lines.append('')
               else:
                   raise SystemExit(f'unexpected implementation indentation: {line!r}')
-          Path('/tmp/implement-session-model-snapshot.sh').write_text('\n'.join(lines) + '\n')
+          script = '\n'.join(lines) + '\n'
+          ambiguous = (
+              'replace_once(\n'
+              '    spawn_path,\n'
+              '    "    sampling_config: SamplingConfig,\\n",\n'
+              '    "    mut sampling_config: SamplingConfig,\\n",\n'
+              ')\n'
+          )
+          targeted = (
+              'replace_once(\n'
+              '    spawn_path,\n'
+              '    \'\'\'pub(crate) async fn spawn_session_actor(\n'
+              '    session_info: SessionInfo,\n'
+              '    gateway: GatewaySender,\n'
+              '    sampling_config: SamplingConfig,\n'
+              '\'\'\',\n'
+              '    \'\'\'pub(crate) async fn spawn_session_actor(\n'
+              '    session_info: SessionInfo,\n'
+              '    gateway: GatewaySender,\n'
+              '    mut sampling_config: SamplingConfig,\n'
+              '\'\'\',\n'
+              ')\n'
+          )
+          if script.count(ambiguous) != 1:
+              raise SystemExit(f'expected one ambiguous spawn patch, found {script.count(ambiguous)}')
+          script = script.replace(ambiguous, targeted, 1)
+          Path('/tmp/implement-session-model-snapshot.sh').write_text(script)
           PY
 
       - name: Run implementation and validation
