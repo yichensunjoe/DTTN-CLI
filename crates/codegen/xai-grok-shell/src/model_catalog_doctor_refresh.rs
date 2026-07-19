@@ -64,7 +64,10 @@ impl fmt::Debug for DoctorCatalogRefreshOptions {
         formatter
             .debug_struct("DoctorCatalogRefreshOptions")
             .field("provider_base_url", &redact_url(&self.provider_base_url))
-            .field("endpoint_override", &self.endpoint_override.as_ref().map(redact_url))
+            .field(
+                "endpoint_override",
+                &self.endpoint_override.as_ref().map(redact_url),
+            )
             .field("kind", &self.kind)
             .field("default_protocol", &self.default_protocol)
             .field("inference_credential", &self.inference_credential)
@@ -101,11 +104,8 @@ pub async fn refresh_model_catalog_for_doctor(
     };
     let (credential, credential_source) = select_credential(options, &endpoint);
 
-    let mut request = CatalogFetchRequest::new(
-        endpoint.clone(),
-        options.kind,
-        options.default_protocol,
-    );
+    let mut request =
+        CatalogFetchRequest::new(endpoint.clone(), options.kind, options.default_protocol);
     request.credential = credential;
     request.timeout = options.timeout;
     request.cache_ttl = options.cache_ttl;
