@@ -17,9 +17,7 @@ use xai_grok_sampling_types::{MetadataSource, ModelMetadata, ModelProtocol, Sour
 use xai_grok_shell::agent::config::{
     Config as AgentConfig, resolve_model_list, resolve_model_to_sampling_config,
 };
-use xai_grok_shell::model_catalog_runtime::{
-    CatalogFreshness, default_model_catalog_cache,
-};
+use xai_grok_shell::model_catalog_runtime::{CatalogFreshness, default_model_catalog_cache};
 use xai_grok_shell::sampling::{
     ContentPart, ConversationItem, ConversationRequest, ConversationToolChoice, RequestId,
     RetryPolicy, SamplerActor, SamplingClient, SamplingEvent, ToolSpec, UserItem,
@@ -743,10 +741,7 @@ fn render_metadata_evidence(evidence: &ModelMetadataEvidenceReport) {
         );
         render_price(
             "reasoning / 1M",
-            evidence
-                .pricing
-                .reasoning_per_million_microunits
-                .as_ref(),
+            evidence.pricing.reasoning_per_million_microunits.as_ref(),
         );
     }
     if let Some(error) = &evidence.error {
