@@ -240,7 +240,10 @@ fn render_refresh_report(report: &ModelRefreshReport) {
         "  credential source: {:?}",
         report.refresh.credential_source
     );
-    println!("  models received:   {}", report.refresh.catalog.model_count);
+    println!(
+        "  models received:   {}",
+        report.refresh.catalog.model_count
+    );
     if let Some(revision) = &report.refresh.catalog.revision {
         println!("  revision:          {revision}");
     }
