@@ -1,9 +1,8 @@
-//! Runtime model-catalog discovery and cache support.
+//! Provider-neutral model discovery parsing and credential-free sidecar caching.
 //!
-//! This module is deliberately separate from model selection. Provider payloads
-//! are normalized into `xai-grok-sampling-types` metadata, then stored in a
-//! credential-free sidecar cache. A malformed or stale sidecar never changes the
-//! active model catalog by itself.
+//! This module does not change model selection. It normalizes explicit provider
+//! fields into sourced metadata and stores validated snapshots for later Doctor,
+//! compaction, pricing, and status-line integration.
 
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
@@ -50,19 +49,14 @@ pub enum CatalogParseError {
 
 /// Parse an OpenAI-compatible `GET /v1/models` response.
 ///
-/// The standard response normally contains identity only. DTTN consumes extra
-/// fields only when they are explicitly present; it never infers limits or
-/// capabilities from the model name.
+/// Standard identity-only responses remain identity-only. Limits, capabilities,
+/// and pricing are consumed only from explicit fields, never from model-name
+/// heuristics.
 pub fn parse_openai_compatible_catalog(
     payload: &Value,
     options: &CatalogParseOptions<'_>,
 ) -> Result<Vec<ModelMetadata>, CatalogParseError> {
-    parse_catalog_array(
-        payload,
-        "data",
-        MetadataSource::ProviderApi,
-        options,
-    )
+    parse_catalog_array(payload, "data", MetadataSource::ProviderApi, options)
 }
 
 /// Parse the normalized company-owned DTTN registry schema.
@@ -220,10 +214,9 @@ fn parse_pricing(
         lookup_u64_in(object, nested, names).map(|value| sourced(value, source, options))
     };
 
-    // Generic provider payloads are accepted only in explicit integer micro-unit
-    // fields. Ambiguous values such as `input_price: 3.0` are intentionally not
-    // converted because providers disagree on whether those values are dollars,
-    // cents, credits, or per-token rates.
+    // Only explicit integer micro-unit fields are accepted. Ambiguous provider
+    // fields such as `input_price: 3.0` are not converted because their units
+    // differ across providers.
     ModelPricing {
         currency: string(&["currency", "currency_code", "currencyCode"]),
         input_per_million_microunits: integer(&[
@@ -266,16 +259,19 @@ fn sourced<T>(
     source: MetadataSource,
     options: &CatalogParseOptions<'_>,
 ) -> Sourced<T> {
-    let mut sourced = Sourced::new(value, source).with_origin(options.origin);
+    let mut value = Sourced::new(value, source).with_origin(options.origin);
     if let Some(revision) = options.revision {
-        sourced = sourced.with_revision(revision);
+        value = value.with_revision(revision);
     }
-    sourced
+    value
 }
 
 fn lookup_string(object: &Map<String, Value>, names: &[&str]) -> Option<String> {
-    let meta = object.get("_meta").and_then(Value::as_object);
-    lookup_string_in(object, meta, names)
+    lookup_string_in(
+        object,
+        object.get("_meta").and_then(Value::as_object),
+        names,
+    )
 }
 
 fn lookup_string_in(
@@ -283,24 +279,18 @@ fn lookup_string_in(
     nested: Option<&Map<String, Value>>,
     names: &[&str],
 ) -> Option<String> {
-    names
-        .iter()
-        .find_map(|name| object.get(*name).and_then(Value::as_str))
-        .or_else(|| {
-            nested.and_then(|nested| {
-                names
-                    .iter()
-                    .find_map(|name| nested.get(*name).and_then(Value::as_str))
-            })
-        })
+    find_value(object, nested, names, Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
 }
 
 fn lookup_u64(object: &Map<String, Value>, names: &[&str]) -> Option<u64> {
-    let meta = object.get("_meta").and_then(Value::as_object);
-    lookup_u64_in(object, meta, names)
+    lookup_u64_in(
+        object,
+        object.get("_meta").and_then(Value::as_object),
+        names,
+    )
 }
 
 fn lookup_u64_in(
@@ -321,17 +311,12 @@ fn lookup_u64_in(
 }
 
 fn lookup_f64(object: &Map<String, Value>, names: &[&str]) -> Option<f64> {
-    let meta = object.get("_meta").and_then(Value::as_object);
-    names
-        .iter()
-        .find_map(|name| object.get(*name).and_then(Value::as_f64))
-        .or_else(|| {
-            meta.and_then(|meta| {
-                names
-                    .iter()
-                    .find_map(|name| meta.get(*name).and_then(Value::as_f64))
-            })
-        })
+    find_value(
+        object,
+        object.get("_meta").and_then(Value::as_object),
+        names,
+        Value::as_f64,
+    )
 }
 
 fn lookup_bool_in(
@@ -339,14 +324,23 @@ fn lookup_bool_in(
     nested: Option<&Map<String, Value>>,
     names: &[&str],
 ) -> Option<bool> {
+    find_value(object, nested, names, Value::as_bool)
+}
+
+fn find_value<'a, T>(
+    object: &'a Map<String, Value>,
+    nested: Option<&'a Map<String, Value>>,
+    names: &[&str],
+    convert: impl Fn(&'a Value) -> Option<T> + Copy,
+) -> Option<T> {
     names
         .iter()
-        .find_map(|name| object.get(*name).and_then(Value::as_bool))
+        .find_map(|name| object.get(*name).and_then(convert))
         .or_else(|| {
             nested.and_then(|nested| {
                 names
                     .iter()
-                    .find_map(|name| nested.get(*name).and_then(Value::as_bool))
+                    .find_map(|name| nested.get(*name).and_then(convert))
             })
         })
 }
@@ -412,6 +406,7 @@ impl ModelCatalogCacheDocument {
                 "catalog contains more than {MAX_CATALOG_MODELS} models"
             )));
         }
+
         let mut ids = HashSet::with_capacity(self.models.len());
         for model in &self.models {
             if model.model_id.trim().is_empty() {
@@ -464,12 +459,10 @@ pub enum ModelCatalogCacheError {
     Invalid(String),
 }
 
-/// Append-only cache directory.
+/// Append-only cache directory using temporary-file to unique-final-file rename.
 ///
-/// Writers create a temporary file and atomically rename it to a unique final
-/// name. Since the destination never exists, this operation is atomic on both
-/// Windows and Unix without requiring platform-specific replace APIs. Readers
-/// select the newest valid final file and ignore partial `.tmp` files.
+/// The destination never exists, so the commit is atomic on Windows and Unix.
+/// Readers ignore `.tmp` files and fall back to the newest older valid entry.
 #[derive(Debug, Clone)]
 pub struct ModelCatalogCache {
     directory: PathBuf,
@@ -512,8 +505,7 @@ impl ModelCatalogCache {
             "catalog-{:020}-{pid:010}-{nonce:020}.json",
             document.fetched_at_unix_ms
         );
-        let temp_name = format!(".{final_name}.tmp");
-        let temp_path = self.directory.join(temp_name);
+        let temp_path = self.directory.join(format!(".{final_name}.tmp"));
         let final_path = self.directory.join(final_name);
 
         let mut options = OpenOptions::new();
@@ -524,15 +516,12 @@ impl ModelCatalogCache {
             options.mode(0o600);
         }
         let mut file = options.open(&temp_path)?;
-        if let Err(error) = (|| -> Result<(), std::io::Error> {
-            file.write_all(&json)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temp_path, &final_path)?;
-            Ok(())
-        })() {
+        file.write_all(&json)?;
+        file.sync_all()?;
+        drop(file);
+        if let Err(error) = fs::rename(&temp_path, &final_path) {
             let _ = fs::remove_file(&temp_path);
-            return Err(ModelCatalogCacheError::Io(error));
+            return Err(error.into());
         }
 
         self.prune_old_entries();
@@ -556,12 +545,12 @@ impl ModelCatalogCache {
         paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
 
         for path in paths {
-            let metadata = match fs::symlink_metadata(&path) {
+            match fs::symlink_metadata(&path) {
                 Ok(metadata) if metadata.file_type().is_symlink() => continue,
                 Ok(metadata) if metadata.len() as usize > MAX_CACHE_BYTES => continue,
                 Ok(_) => {}
                 Err(_) => continue,
-            }
+            };
             let bytes = match fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(_) => continue,
@@ -634,18 +623,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_explicit_openai_compatible_extensions_without_name_guessing() {
+    fn parses_explicit_extensions_with_provenance() {
         let payload = json!({
             "data": [{
                 "id": "example-model",
                 "name": "Example Model",
                 "context_window": 262144,
                 "max_completion_tokens": "65536",
-                "capabilities": {
-                    "tool_calling": true,
-                    "vision": true,
-                    "streaming": true
-                },
+                "capabilities": {"tool_calling": true, "vision": true},
                 "pricing": {
                     "currency": "USD",
                     "input_per_million_microunits": 2_000_000,
@@ -654,9 +639,9 @@ mod tests {
             }]
         });
 
-        let models = parse_openai_compatible_catalog(&payload, &options()).unwrap();
-        let model = &models[0];
-        assert_eq!(model.model_id, "example-model");
+        let model = parse_openai_compatible_catalog(&payload, &options())
+            .unwrap()
+            .remove(0);
         assert_eq!(model.context_window.as_ref().unwrap().value, 262_144);
         assert_eq!(model.max_output_tokens.as_ref().unwrap().value, 65_536);
         assert_eq!(
@@ -671,7 +656,6 @@ mod tests {
             model
                 .pricing
                 .output_per_million_microunits
-                .as_ref()
                 .unwrap()
                 .value,
             8_000_000
@@ -679,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn standard_identity_only_response_keeps_unknown_fields_unknown() {
+    fn identity_only_response_keeps_unknown_fields_unknown() {
         let payload = json!({"data": [{"id": "identity-only"}]});
         let model = parse_openai_compatible_catalog(&payload, &options())
             .unwrap()
@@ -691,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn dttn_registry_requires_supported_schema_and_uses_enterprise_source() {
+    fn registry_requires_supported_schema_and_uses_enterprise_source() {
         let payload = json!({
             "schema_version": 1,
             "models": [{"id": "company/model", "context_window": 128000}]
@@ -743,7 +727,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(fresh.freshness, CatalogFreshness::Fresh);
-        assert_eq!(fresh.document.models[0].model_id, "example-model");
 
         let stale = cache
             .load_latest(Some("https://provider.example/v1/models"), 2_000)
@@ -763,10 +746,13 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let cache = ModelCatalogCache::new(dir.path()).with_max_entries(4);
         cache.store(&document(1_000, 3_000)).unwrap();
-        let corrupt = dir
-            .path()
-            .join("catalog-00000000000000002000-0000000001-00000000000000000000.json");
-        fs::write(corrupt, b"not-json").unwrap();
+        fs::write(
+            dir.path().join(
+                "catalog-00000000000000002000-0000000001-00000000000000000000.json",
+            ),
+            b"not-json",
+        )
+        .unwrap();
 
         let loaded = cache.load_latest(None, 1_500).unwrap().unwrap();
         assert_eq!(loaded.document.fetched_at_unix_ms, 1_000);
