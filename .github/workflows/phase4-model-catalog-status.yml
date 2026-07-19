@@ -16,7 +16,7 @@ jobs:
   validate-model-catalog:
     if: github.head_ref == 'refactor/dttn-model-catalog-status-phase-4'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout branch
         uses: actions/checkout@v6
@@ -43,6 +43,7 @@ jobs:
               rustfmt --edition 2024 --check "${changed_rust[@]}"
             fi
             cargo test -p xai-grok-sampling-types
+            cargo test -p xai-grok-shell model_catalog_runtime::tests --lib
             git diff --check "origin/${{ github.base_ref }}...HEAD"
           } 2>&1 | tee phase4-validation.log
 
