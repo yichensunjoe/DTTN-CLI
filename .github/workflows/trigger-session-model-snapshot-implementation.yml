@@ -1,0 +1,47 @@
+name: Trigger DTTN session model snapshot implementation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  trigger-session-model-snapshot-implementation:
+    if: github.head_ref == 'automation/implement-session-model-snapshot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Extract implementation script
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/implement-session-model-snapshot.yml').read_text()
+          marker = '        run: |\n'
+          if source.count(marker) != 1:
+              raise SystemExit('implementation workflow must contain exactly one run block')
+          block = source.split(marker, 1)[1]
+          lines = []
+          for line in block.splitlines():
+              if line.startswith('          '):
+                  lines.append(line[10:])
+              elif not line.strip():
+                  lines.append('')
+              else:
+                  raise SystemExit(f'unexpected implementation indentation: {line!r}')
+          Path('/tmp/implement-session-model-snapshot.sh').write_text('\n'.join(lines) + '\n')
+          PY
+
+      - name: Run implementation and validation
+        shell: bash
+        run: bash /tmp/implement-session-model-snapshot.sh
