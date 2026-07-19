@@ -1,17 +1,16 @@
-//! Config file loading for Grok.
+//! DTTN configuration loading and policy composition.
 //!
 //! Merge order (lowest → highest priority):
-//! 1. `/etc/grok/managed_config.toml`
-//! 2. `$GROK_HOME/managed_config.toml`
-//! 3. `$GROK_HOME/config.toml`
-//! 4. `$GROK_HOME/requirements.toml` (cloud cache; Ed25519-signed at rest once a
-//!    key is embedded — see [`signed_policy`] — below the OS-protected layers)
-//! 5. `/etc/grok/requirements.toml`
-//! 6. macOS MDM managed preferences (`ai.x.grok`, admin-forced) — macOS only
+//! 1. `/etc/dttn/managed_config.toml`
+//! 2. `$DTTN_HOME/managed_config.toml`
+//! 3. `$DTTN_HOME/config.toml`
+//! 4. `$DTTN_HOME/requirements.toml` (signed remote cache, below OS-protected layers)
+//! 5. `/etc/dttn/requirements.toml`
+//! 6. Platform-managed preferences where supported
 //!
 //! Each layer applies its own [`[[version_overrides]]`](version_overrides)
-//! before merge. Requirements layers (#4–#6) may opt into fail-closed startup;
-//! see [`validate_requirements`].
+//! before merge. Requirements layers may opt into fail-closed startup; see
+//! [`validate_requirements`].
 
 pub mod campaigns;
 pub mod config_override;
@@ -46,8 +45,9 @@ pub use managed_cache::{
 };
 pub use paths::{
     claude_managed_settings_path, claude_managed_settings_probe_path, decode_cwd_from_dirname,
-    default_grok_home, encode_cwd_dirname, ensure_sessions_cwd_dir, grok_application, grok_home,
-    sessions_cwd_dir, system_config_dir, user_grok_home,
+    default_dttn_home, default_grok_home, dttn_application, dttn_home, encode_cwd_dirname,
+    ensure_sessions_cwd_dir, grok_application, grok_home, sessions_cwd_dir, system_config_dir,
+    user_dttn_home, user_grok_home,
 };
 pub use validation::{
     RequirementsError, RequirementsLayer, RequirementsSource, fail_closed_flag_from_str,
@@ -55,7 +55,8 @@ pub use validation::{
 };
 pub use version_overrides::{VersionOverrideError, apply_version_overrides};
 
-/// Parse an env var as a boolean. `None` if unset or unrecognized.
+/// Parse an environment variable as a boolean. Returns `None` when unset or
+/// unrecognized.
 pub fn env_bool(name: &str) -> Option<bool> {
     let value = std::env::var(name).ok()?;
     match value.trim().to_ascii_lowercase().as_str() {

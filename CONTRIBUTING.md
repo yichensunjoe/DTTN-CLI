@@ -1,19 +1,24 @@
 # Contributing
 
-This repository does **not** accept external pull requests or unsolicited
-patches.
+DTTN-CLI 当前由内部工程团队维护。
 
-SpaceXAI develops this software internally. The public tree is published for
-source transparency and local builds under the terms of the Apache License,
-Version 2.0 (see [`LICENSE`](LICENSE)).
+在贡献代码前，请先通过项目负责人确认需求范围、兼容性要求和验收标准。所有修改应通过独立分支和 Pull Request 提交，不应直接写入受保护的主分支。
 
-## Security reports
+## 工程要求
 
-Please report security issues through the process described in
-[`SECURITY.md`](SECURITY.md). Do not open a public issue for vulnerabilities.
+提交应至少满足以下条件：
 
-## Licensing of this source
+- 修改范围清晰，避免将无关重构混入同一提交。
+- Agent Runtime、工具调用、权限或状态管理的修改必须附带测试。
+- 涉及超时、重试、取消、恢复或并发的代码必须覆盖失败场景。
+- 不得在日志、测试数据或配置示例中提交凭据、Token 或内部地址。
+- 用户可见命名统一使用 DTTN，不应新增遗留供应商品牌标识。
+- 根工作区配置由生成流程维护时，应优先修改对应的源配置或 crate 配置。
 
-By downloading or using this source, you agree that your use is governed by
-the Apache License, Version 2.0. No contributor license agreement is offered
-because external contributions are not accepted.
+## 安全问题
+
+安全漏洞应按 [`SECURITY.md`](SECURITY.md) 中的流程私下报告。不要通过公开 Issue 披露漏洞细节。
+
+## 许可证
+
+本仓库第一方代码使用 Apache License 2.0。第三方代码和内嵌依赖继续遵循各自许可证及 NOTICE 文件。

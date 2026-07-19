@@ -1,9 +1,9 @@
-//! Filesystem locations for grok config files and binaries.
+//! Filesystem locations for DTTN configuration, state, and binaries.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-static GROK_HOME: OnceLock<PathBuf> = OnceLock::new();
+static DTTN_HOME: OnceLock<PathBuf> = OnceLock::new();
 
 #[cfg(target_os = "macos")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str =
@@ -11,68 +11,96 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str =
 #[cfg(target_os = "linux")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.json";
 
-/// The default user grok directory (`~/.grok`, canonicalized) used when
-/// `GROK_HOME` is unset. Exposed so callers (e.g. display helpers) can detect
-/// whether [`grok_home()`] is the default without duplicating the computation.
+/// Default per-user DTTN directory (`~/.dttn`, canonicalized) used when
+/// `DTTN_HOME` is unset.
 ///
 /// Uses [`dunce::canonicalize`] instead of [`std::fs::canonicalize`]: on
 /// Windows, std returns a verbatim path (`\\?\C:\Users\...`) which external
-/// tools choke on — e.g. `git clone` rejects `\\?\` destinations with
-/// "Invalid argument", breaking marketplace cache clones under
-/// `~/.grok/marketplace-cache`. `dunce` strips the prefix whenever the path
-/// is safely representable in legacy form; on non-Windows it is identical to
+/// tools may reject. `dunce` strips the prefix whenever the path is safely
+/// representable in legacy form; on non-Windows it is identical to
 /// `std::fs::canonicalize`.
-///
-/// Keep the dunce canonicalization in sync with the hand-rolled duplicate in
-/// `xai_fast_worktree::db::resolve_grok_home` (deliberately standalone crate).
-pub fn default_grok_home() -> PathBuf {
+pub fn default_dttn_home() -> PathBuf {
     #[allow(deprecated)]
     let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    dunce::canonicalize(&home).unwrap_or(home).join(".grok")
+    dunce::canonicalize(&home).unwrap_or(home).join(".dttn")
 }
 
-/// Per-user config directory: `$GROK_HOME` or `~/.grok`. Created if needed.
-pub fn grok_home() -> PathBuf {
-    GROK_HOME
+/// Per-user state directory: `$DTTN_HOME` or `~/.dttn`. Created if needed.
+///
+/// `GROK_HOME` remains a temporary compatibility fallback for existing
+/// installations during the staged migration. New configuration and
+/// documentation must use `DTTN_HOME`.
+pub fn dttn_home() -> PathBuf {
+    DTTN_HOME
         .get_or_init(|| {
-            let grok_home = if let Ok(v) = std::env::var("GROK_HOME") {
-                PathBuf::from(v)
-            } else {
-                default_grok_home()
-            };
-            let _ = std::fs::create_dir_all(&grok_home);
-            grok_home
+            let home = std::env::var_os("DTTN_HOME")
+                .or_else(|| std::env::var_os("GROK_HOME"))
+                .map(PathBuf::from)
+                .unwrap_or_else(default_dttn_home);
+            let _ = std::fs::create_dir_all(&home);
+            home
         })
         .clone()
 }
 
-/// The user-global grok home, but only when one genuinely resolves: `Some` when
-/// `$GROK_HOME` is set or a home directory is found, `None` otherwise. Unlike
-/// [`grok_home()`], this never falls back to a cwd-relative `.grok`, so callers
-/// that *scan* user-global grok resources (hooks, marketplace sources, ...) don't
-/// mistake a project's `.grok` tree for the user-global one when no home resolves.
-pub fn user_grok_home() -> Option<PathBuf> {
+/// User-global DTTN home, but only when one genuinely resolves.
+///
+/// Returns `Some` when `DTTN_HOME`, the temporary legacy environment variable,
+/// or an operating-system home directory is available. Unlike [`dttn_home`],
+/// this never treats a cwd-relative directory as user-global state.
+pub fn user_dttn_home() -> Option<PathBuf> {
     #[allow(deprecated)]
-    let resolvable = std::env::var_os("GROK_HOME").is_some() || std::env::home_dir().is_some();
-    resolvable.then(grok_home)
+    let resolvable = std::env::var_os("DTTN_HOME").is_some()
+        || std::env::var_os("GROK_HOME").is_some()
+        || std::env::home_dir().is_some();
+    resolvable.then(dttn_home)
 }
 
-/// Canonical grok application path: `$GROK_HOME/bin/grok` (Unix) or `grok.exe` (Windows).
-pub fn grok_application() -> PathBuf {
-    let name = if cfg!(windows) { "grok.exe" } else { "grok" };
-    grok_home().join("bin").join(name)
+/// Canonical DTTN application path: `$DTTN_HOME/bin/dttn` on Unix or
+/// `dttn.exe` on Windows.
+pub fn dttn_application() -> PathBuf {
+    let name = if cfg!(windows) { "dttn.exe" } else { "dttn" };
+    dttn_home().join("bin").join(name)
 }
 
-/// System-wide config directory: `/etc/grok/` on Unix, `None` on Windows.
+/// System-wide configuration directory: `/etc/dttn/` on Unix, `None` on Windows.
 pub fn system_config_dir() -> Option<PathBuf> {
     if cfg!(unix) {
-        Some(PathBuf::from("/etc/grok"))
+        Some(PathBuf::from("/etc/dttn"))
     } else {
         None
     }
 }
 
-/// System path for the managed-settings.json used for settings compat, if it exists.
+/// Temporary source-compatibility wrapper. New code must use
+/// [`default_dttn_home`].
+#[deprecated(note = "use default_dttn_home")]
+pub fn default_grok_home() -> PathBuf {
+    default_dttn_home()
+}
+
+/// Temporary source-compatibility wrapper. New code must use [`dttn_home`].
+#[deprecated(note = "use dttn_home")]
+pub fn grok_home() -> PathBuf {
+    dttn_home()
+}
+
+/// Temporary source-compatibility wrapper. New code must use
+/// [`user_dttn_home`].
+#[deprecated(note = "use user_dttn_home")]
+pub fn user_grok_home() -> Option<PathBuf> {
+    user_dttn_home()
+}
+
+/// Temporary source-compatibility wrapper. New code must use
+/// [`dttn_application`].
+#[deprecated(note = "use dttn_application")]
+pub fn grok_application() -> PathBuf {
+    dttn_application()
+}
+
+/// System path for the managed-settings.json used for settings compatibility,
+/// if it exists.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn claude_managed_settings_path() -> Option<PathBuf> {
     let path = PathBuf::from(CLAUDE_MANAGED_SETTINGS_PATH);
@@ -85,7 +113,7 @@ pub fn claude_managed_settings_path() -> Option<PathBuf> {
 }
 
 /// The platform path where managed-settings.json would live for settings
-/// compat, whether or not it exists. `None` on unsupported platforms.
+/// compatibility, whether or not it exists. `None` on unsupported platforms.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn claude_managed_settings_probe_path() -> Option<PathBuf> {
     Some(PathBuf::from(CLAUDE_MANAGED_SETTINGS_PATH))
@@ -127,15 +155,15 @@ pub fn encode_cwd_dirname(cwd: &str) -> String {
 
 /// Recover the original CWD from a sessions CWD directory.
 ///
-/// Tries URL-decoding the directory name first (works for short/legacy dirs).
-/// Falls back to reading a `.cwd` metadata file inside the directory (written
-/// by [`ensure_sessions_cwd_dir`] for hash-based dirs).
+/// Tries URL-decoding the directory name first (works for short or legacy
+/// directories). Falls back to reading a `.cwd` metadata file inside the
+/// directory, written by [`ensure_sessions_cwd_dir`] for hash-based names.
 pub fn decode_cwd_from_dirname(dir: &std::path::Path) -> Option<String> {
     let name = dir.file_name()?.to_str()?;
     if let Ok(decoded) = urlencoding::decode(name) {
         let s = decoded.into_owned();
-        // URL-decoded absolute CWDs always start with `/` (Unix) or a drive
-        // letter (Windows).  The slug-hash form never does, so this
+        // URL-decoded absolute CWDs always start with `/` on Unix or a drive
+        // letter on Windows. The slug-hash form never does, so this
         // distinguishes the two encodings unambiguously.
         if s.starts_with('/') || (cfg!(windows) && s.chars().nth(1) == Some(':')) {
             return Some(s);
@@ -146,28 +174,20 @@ pub fn decode_cwd_from_dirname(dir: &std::path::Path) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-/// Build the CWD-level session directory path:
-/// `grok_home()/sessions/{encode_cwd_dirname(cwd)}`.
-///
-/// Does **not** create the directory on disk — use [`ensure_sessions_cwd_dir`]
-/// when the directory must exist.
+/// Build the CWD-level session directory path without creating it.
 pub fn sessions_cwd_dir(cwd: &str) -> PathBuf {
-    grok_home().join("sessions").join(encode_cwd_dirname(cwd))
+    dttn_home().join("sessions").join(encode_cwd_dirname(cwd))
 }
 
 /// Create the CWD-level session directory and write a `.cwd` metadata file
-/// when hash-based encoding is used (long paths).
-///
-/// For short paths the `.cwd` file is not written because the directory name
-/// itself is reversible via URL-decoding.
+/// when hash-based encoding is used for a long path.
 pub fn ensure_sessions_cwd_dir(cwd: &str) -> std::io::Result<PathBuf> {
     let encoded_name = encode_cwd_dirname(cwd);
-    let dir = grok_home().join("sessions").join(&encoded_name);
+    let dir = dttn_home().join("sessions").join(&encoded_name);
     std::fs::create_dir_all(&dir)?;
-    // Hash-based encoding is in use when the dirname differs from the
-    // plain URL-encoded form.  Write a `.cwd` file so decode can recover
-    // the original path.  O_CREAT|O_EXCL via create_new avoids TOCTOU
-    // races with parallel session starts.
+    // Hash-based encoding is in use when the dirname differs from the plain
+    // URL-encoded form. O_CREAT|O_EXCL via create_new avoids TOCTOU races with
+    // parallel session starts.
     if encoded_name != urlencoding::encode(cwd).as_ref() {
         let cwd_file = dir.join(".cwd");
         match std::fs::File::create_new(&cwd_file) {
@@ -183,8 +203,8 @@ pub fn ensure_sessions_cwd_dir(cwd: &str) -> std::io::Result<PathBuf> {
 
 /// Generate a URL-safe slug from a string.
 ///
-/// Lowercases, replaces non-alphanumeric chars with `-`, collapses
-/// consecutive dashes, and truncates to `max_len` characters.
+/// Lowercases, replaces non-alphanumeric chars with `-`, collapses consecutive
+/// dashes, and truncates to `max_len` characters.
 fn slugify(input: &str, max_len: usize) -> String {
     let mut result = String::with_capacity(input.len());
     let mut prev_dash = false;
@@ -206,7 +226,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Realistic CWDs that trigger the bug (URL-encoded > 255 bytes).
+    /// Realistic CWDs that exceed a filesystem component after URL encoding.
     const LONG_CWDS: &[&str] = &[
         "/Users/dev/Documents/開発プロジェクト/機能追加/テスト環境/ソースコード/main-branch",
         "/Users/user/Library/Mobile Documents/com~apple~CloudDocs/项目文件/深层嵌套目录/更深层次的/工作区域/project",
@@ -301,13 +321,17 @@ mod tests {
     }
 
     #[test]
-    fn default_grok_home_has_no_verbatim_prefix() {
-        // On Windows, std::fs::canonicalize returns `\\?\C:\...` verbatim
-        // paths that external tools (notably `git clone`) reject. The dunce
-        // canonicalization must yield a plain path. No-op assertion on Unix.
-        let home = default_grok_home();
+    fn default_dttn_home_has_no_verbatim_prefix() {
+        let home = default_dttn_home();
         assert!(!home.to_string_lossy().starts_with(r"\\?\"));
-        assert!(home.ends_with(".grok"));
+        assert!(home.ends_with(".dttn"));
+    }
+
+    #[test]
+    fn dttn_application_uses_product_binary_name() {
+        let app = dttn_application();
+        let expected = if cfg!(windows) { "dttn.exe" } else { "dttn" };
+        assert_eq!(app.file_name().and_then(|name| name.to_str()), Some(expected));
     }
 
     #[test]

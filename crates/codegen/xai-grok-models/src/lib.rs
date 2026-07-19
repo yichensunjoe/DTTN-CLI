@@ -1,14 +1,12 @@
 //! Default model IDs loaded from `default_models.json` at runtime.
-//! Edit that JSON file to change them.
+//! Edit that JSON file to change the distribution defaults.
 //!
 //! At runtime each model is resolved via:
-//!   CLI flag > ENV var > config.toml > remote settings > these defaults
+//!   CLI flag > environment variable > config.toml > remote settings > these defaults
 
 use std::sync::LazyLock;
 
-/// The raw JSON, embedded at compile time. Re-exported through the
-/// `xai_grok_shell::models` facade and consumed by `agent::config`, so it must
-/// be `pub` (was `pub(crate)` when this lived inside the shell crate).
+/// The raw JSON, embedded at compile time and consumed by the runtime config layer.
 pub const DEFAULT_MODELS_JSON: &str = include_str!("../default_models.json");
 
 #[derive(serde::Deserialize)]
@@ -48,12 +46,12 @@ pub fn default_model() -> &'static str {
     &DEFAULTS.default
 }
 
-/// Model for web search tool synthesis. Falls back to default model.
+/// Model for web-search synthesis. Falls back to the primary model.
 pub fn default_web_search_model() -> &'static str {
     DEFAULTS.web_search.as_deref().unwrap_or(&DEFAULTS.default)
 }
 
-/// Model for image describe. Falls back to default model.
+/// Model for image description. Falls back to the primary model.
 pub fn default_image_description_model() -> &'static str {
     DEFAULTS
         .image_description
@@ -61,10 +59,30 @@ pub fn default_image_description_model() -> &'static str {
         .unwrap_or(&DEFAULTS.default)
 }
 
-/// Model for session title generation. Falls back to default model.
+/// Model for session-title generation. Falls back to the primary model.
 pub fn default_session_summary_model() -> &'static str {
     DEFAULTS
         .session_summary
         .as_deref()
         .unwrap_or(&DEFAULTS.default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DISTRIBUTION_DEFAULT_MODEL: &str = "agnes-2.0-flash";
+
+    #[test]
+    fn distribution_defaults_resolve_to_agnes() {
+        assert_eq!(default_model(), DISTRIBUTION_DEFAULT_MODEL);
+        assert_eq!(default_web_search_model(), DISTRIBUTION_DEFAULT_MODEL);
+        assert_eq!(default_image_description_model(), DISTRIBUTION_DEFAULT_MODEL);
+        assert_eq!(default_session_summary_model(), DISTRIBUTION_DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn distribution_model_catalog_has_no_legacy_vendor_branding() {
+        assert!(!DEFAULT_MODELS_JSON.to_ascii_lowercase().contains("grok"));
+    }
 }

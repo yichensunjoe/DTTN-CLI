@@ -1,0 +1,76 @@
+name: DTTN Core Validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "refactor/**"
+
+permissions:
+  contents: read
+
+jobs:
+  distribution-boundary:
+    name: Validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Validate DTTN distribution boundary
+        run: python scripts/check_dttn_phase1.py
+
+      - name: Validate DTTN runtime boundary
+        run: python scripts/check_dttn_phase2.py
+
+      - name: Test embedded model defaults
+        run: cargo test -p xai-grok-models
+
+  composition-check:
+    name: Check dttn composition root
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+          protoc --version
+
+      - name: Test DTTN runtime defaults
+        run: cargo test -p xai-grok-shell --test dttn_runtime_defaults
+
+      - name: Check dttn binary
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check -p xai-grok-pager-bin --bin dttn 2>&1 | tee cargo-check.log
+
+      - name: Upload composition check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dttn-composition-check-log
+          path: cargo-check.log
+          if-no-files-found: warn
+          retention-days: 7
