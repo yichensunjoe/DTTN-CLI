@@ -48,9 +48,20 @@ jobs:
           set +e
           bash /tmp/implement-session-model-snapshot.sh > /tmp/implementation.log 2>&1
           status=$?
+          echo "$status" > /tmp/implementation.status
           if [ "$status" -ne 0 ]; then
             echo "Phase 5 implementation failed with status $status"
-            tail -n 200 /tmp/implementation.log
             exit "$status"
           fi
           tail -n 60 /tmp/implementation.log
+
+      - name: Upload implementation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-session-snapshot-implementation-${{ github.run_attempt }}
+          path: |
+            /tmp/implementation.log
+            /tmp/implementation.status
+          if-no-files-found: warn
+          retention-days: 7
