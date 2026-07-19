@@ -69,9 +69,8 @@ fn options_debug_redacts_credentials_and_queries() {
         CatalogEndpointKind::OpenAiCompatible,
         ModelProtocol::ChatCompletions,
     );
-    options.endpoint_override = Some(
-        Url::parse("https://registry.example/models?registry_secret=1").unwrap(),
-    );
+    options.endpoint_override =
+        Some(Url::parse("https://registry.example/models?registry_secret=1").unwrap());
     options.inference_credential = Some(CatalogCredential::bearer("top-secret").unwrap());
     let rendered = format!("{options:?}");
     assert!(!rendered.contains("top-secret"));
@@ -88,8 +87,7 @@ async fn same_origin_refresh_reuses_inference_bearer() {
         CatalogEndpointKind::OpenAiCompatible,
         ModelProtocol::ChatCompletions,
     );
-    options.inference_credential =
-        Some(CatalogCredential::bearer("inference-secret").unwrap());
+    options.inference_credential = Some(CatalogCredential::bearer("inference-secret").unwrap());
     options.allow_insecure_localhost = true;
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -114,10 +112,8 @@ async fn cross_origin_refresh_does_not_leak_inference_bearer() {
         CatalogEndpointKind::OpenAiCompatible,
         ModelProtocol::ChatCompletions,
     );
-    options.endpoint_override =
-        Some(Url::parse(&format!("http://{address}/v1/models")).unwrap());
-    options.inference_credential =
-        Some(CatalogCredential::bearer("must-not-leak").unwrap());
+    options.endpoint_override = Some(Url::parse(&format!("http://{address}/v1/models")).unwrap());
+    options.inference_credential = Some(CatalogCredential::bearer("must-not-leak").unwrap());
     options.allow_insecure_localhost = true;
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -141,12 +137,9 @@ async fn dedicated_bearer_is_allowed_for_cross_origin_registry() {
         CatalogEndpointKind::OpenAiCompatible,
         ModelProtocol::ChatCompletions,
     );
-    options.endpoint_override =
-        Some(Url::parse(&format!("http://{address}/v1/models")).unwrap());
-    options.inference_credential =
-        Some(CatalogCredential::bearer("inference-secret").unwrap());
-    options.dedicated_credential =
-        Some(CatalogCredential::bearer("registry-secret").unwrap());
+    options.endpoint_override = Some(Url::parse(&format!("http://{address}/v1/models")).unwrap());
+    options.inference_credential = Some(CatalogCredential::bearer("inference-secret").unwrap());
+    options.dedicated_credential = Some(CatalogCredential::bearer("registry-secret").unwrap());
     options.allow_insecure_localhost = true;
 
     let dir = tempfile::TempDir::new().unwrap();
