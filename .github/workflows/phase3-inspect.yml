@@ -3,7 +3,7 @@ name: DTTN Phase 3 Validation
 on:
   pull_request:
     branches:
-      - refactor/dttn-core-phase-1
+      - main
 
 concurrency:
   group: dttn-phase3-${{ github.event.pull_request.number }}
