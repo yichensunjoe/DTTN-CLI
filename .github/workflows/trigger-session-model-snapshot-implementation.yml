@@ -28,9 +28,10 @@ jobs:
 
           source = Path('.github/workflows/implement-session-model-snapshot.yml').read_text()
           marker = '        run: |\n'
-          if source.count(marker) != 1:
-              raise SystemExit('implementation workflow must contain exactly one run block')
-          block = source.split(marker, 1)[1]
+          if marker not in source:
+              raise SystemExit('implementation workflow has no run block')
+          # The implementation is the final run block; the earlier block only installs protoc.
+          block = source.rsplit(marker, 1)[1]
           lines = []
           for line in block.splitlines():
               if line.startswith('          '):
