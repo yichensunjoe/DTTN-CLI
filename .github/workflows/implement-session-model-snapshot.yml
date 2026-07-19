@@ -1,0 +1,865 @@
+name: Implement DTTN session model snapshot
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  implement-session-model-snapshot:
+    if: github.head_ref == 'automation/implement-session-model-snapshot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Apply Phase 5 implementation
+        shell: bash
+        env:
+          FEATURE_BRANCH: refactor/dttn-session-model-snapshot-phase-5
+          EXPECTED_HEAD: 67c4964dac9732613f362fc639177ed3bea9ac7b
+        run: |
+          set -euo pipefail
+          git config user.name "dttn-automation"
+          git config user.email "dttn-automation@users.noreply.github.com"
+          git fetch origin "${FEATURE_BRANCH}"
+          git checkout -B "${FEATURE_BRANCH}" FETCH_HEAD
+
+          cat > crates/codegen/xai-grok-shell/src/session/session_model_snapshot.rs <<'RS'
+          //! Session-frozen model metadata.
+          //!
+          //! A session resolves its runtime model contract once and stores a
+          //! credential-free snapshot beside the session. Resume restores the
+          //! newest valid snapshot instead of silently adopting refreshed
+          //! provider metadata. Explicit model switches append a new snapshot.
+
+          use std::fs::{self, OpenOptions};
+          use std::io::Write;
+          use std::path::{Path, PathBuf};
+          use std::sync::atomic::{AtomicU64, Ordering};
+          use std::time::{SystemTime, UNIX_EPOCH};
+
+          use serde::{Deserialize, Serialize};
+          use xai_grok_sampler::SamplerConfig;
+          use xai_grok_sampling_types::{
+              ApiBackend, ModelMetadata, ProviderExtensions,
+          };
+
+          use crate::model_catalog_runtime::{CatalogFreshness, default_model_catalog_cache};
+          use crate::session::info::Info as SessionInfo;
+
+          pub const SESSION_MODEL_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+          const SNAPSHOT_DIRECTORY: &str = "resolved-model-v1";
+          const MAX_SNAPSHOT_BYTES: usize = 1024 * 1024;
+          const DEFAULT_SNAPSHOT_ENTRIES: usize = 4;
+          static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
+
+          /// Credential-free model contract frozen for one session generation.
+          #[derive(Debug, Clone, Serialize, Deserialize)]
+          pub struct ResolvedSessionModelSnapshot {
+              pub schema_version: u32,
+              pub model_id: String,
+              pub api_backend: ApiBackend,
+              pub provider_extensions: ProviderExtensions,
+              pub context_window: u64,
+              #[serde(default, skip_serializing_if = "Option::is_none")]
+              pub max_completion_tokens: Option<u32>,
+              #[serde(default, skip_serializing_if = "Option::is_none")]
+              pub catalog_metadata: Option<ModelMetadata>,
+              #[serde(default, skip_serializing_if = "Option::is_none")]
+              pub catalog_origin: Option<String>,
+              #[serde(default, skip_serializing_if = "Option::is_none")]
+              pub catalog_revision: Option<String>,
+              #[serde(default, skip_serializing_if = "Option::is_none")]
+              pub catalog_fetched_at_unix_ms: Option<u64>,
+              #[serde(default, skip_serializing_if = "Option::is_none")]
+              pub catalog_expires_at_unix_ms: Option<u64>,
+              #[serde(default)]
+              pub catalog_stale: bool,
+              pub resolved_at_unix_ms: u64,
+          }
+
+          impl ResolvedSessionModelSnapshot {
+              fn validate(&self) -> Result<(), SessionModelSnapshotError> {
+                  if self.schema_version != SESSION_MODEL_SNAPSHOT_SCHEMA_VERSION {
+                      return Err(SessionModelSnapshotError::Invalid(format!(
+                          "unsupported schema version {}",
+                          self.schema_version
+                      )));
+                  }
+                  if self.model_id.trim().is_empty() {
+                      return Err(SessionModelSnapshotError::Invalid(
+                          "model id must not be blank".to_string(),
+                      ));
+                  }
+                  if self.context_window == 0 {
+                      return Err(SessionModelSnapshotError::Invalid(
+                          "context window must be greater than zero".to_string(),
+                      ));
+                  }
+                  if self
+                      .catalog_metadata
+                      .as_ref()
+                      .is_some_and(|metadata| metadata.model_id != self.model_id)
+                  {
+                      return Err(SessionModelSnapshotError::Invalid(
+                          "catalog metadata model id does not match runtime model".to_string(),
+                      ));
+                  }
+                  Ok(())
+              }
+          }
+
+          #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          pub enum SnapshotResolutionKind {
+              Restored,
+              Created,
+          }
+
+          #[derive(Debug, Clone)]
+          pub struct SnapshotResolution {
+              pub snapshot: ResolvedSessionModelSnapshot,
+              pub kind: SnapshotResolutionKind,
+          }
+
+          #[derive(Debug, thiserror::Error)]
+          pub enum SessionModelSnapshotError {
+              #[error("session model snapshot I/O failed: {0}")]
+              Io(#[from] std::io::Error),
+              #[error("session model snapshot serialization failed: {0}")]
+              Serialization(#[from] serde_json::Error),
+              #[error("session model snapshot is invalid: {0}")]
+              Invalid(String),
+          }
+
+          /// Append-only, atomic snapshot store. Readers skip corrupt or oversized
+          /// entries and fall back to the newest older valid snapshot.
+          #[derive(Debug, Clone)]
+          pub struct SessionModelSnapshotStore {
+              directory: PathBuf,
+              max_entries: usize,
+          }
+
+          impl SessionModelSnapshotStore {
+              pub fn new(directory: impl Into<PathBuf>) -> Self {
+                  Self {
+                      directory: directory.into(),
+                      max_entries: DEFAULT_SNAPSHOT_ENTRIES,
+                  }
+              }
+
+              #[cfg(test)]
+              fn with_max_entries(mut self, max_entries: usize) -> Self {
+                  self.max_entries = max_entries.max(1);
+                  self
+              }
+
+              pub fn load_latest(
+                  &self,
+              ) -> Result<Option<ResolvedSessionModelSnapshot>, SessionModelSnapshotError> {
+                  let mut paths = match fs::read_dir(&self.directory) {
+                      Ok(entries) => entries
+                          .filter_map(Result::ok)
+                          .map(|entry| entry.path())
+                          .filter(|path| is_snapshot_path(path))
+                          .collect::<Vec<_>>(),
+                      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                      Err(error) => return Err(error.into()),
+                  };
+                  paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
+
+                  for path in paths {
+                      match fs::symlink_metadata(&path) {
+                          Ok(metadata) if metadata.file_type().is_symlink() => continue,
+                          Ok(metadata) if metadata.len() as usize > MAX_SNAPSHOT_BYTES => continue,
+                          Ok(_) => {}
+                          Err(_) => continue,
+                      }
+                      let bytes = match fs::read(&path) {
+                          Ok(bytes) => bytes,
+                          Err(_) => continue,
+                      };
+                      let snapshot = match serde_json::from_slice::<ResolvedSessionModelSnapshot>(&bytes)
+                      {
+                          Ok(snapshot) => snapshot,
+                          Err(_) => continue,
+                      };
+                      if snapshot.validate().is_ok() {
+                          return Ok(Some(snapshot));
+                      }
+                  }
+                  Ok(None)
+              }
+
+              pub fn store(
+                  &self,
+                  snapshot: &ResolvedSessionModelSnapshot,
+              ) -> Result<PathBuf, SessionModelSnapshotError> {
+                  snapshot.validate()?;
+                  let json = serde_json::to_vec_pretty(snapshot)?;
+                  if json.len() > MAX_SNAPSHOT_BYTES {
+                      return Err(SessionModelSnapshotError::Invalid(format!(
+                          "serialized snapshot exceeds {MAX_SNAPSHOT_BYTES} bytes"
+                      )));
+                  }
+
+                  fs::create_dir_all(&self.directory)?;
+                  let nonce = SNAPSHOT_NONCE.fetch_add(1, Ordering::Relaxed);
+                  let pid = std::process::id();
+                  let final_name = format!(
+                      "snapshot-{:020}-{pid:010}-{nonce:020}.json",
+                      snapshot.resolved_at_unix_ms
+                  );
+                  let temp_path = self.directory.join(format!(".{final_name}.tmp"));
+                  let final_path = self.directory.join(final_name);
+
+                  let mut options = OpenOptions::new();
+                  options.write(true).create_new(true);
+                  #[cfg(unix)]
+                  {
+                      use std::os::unix::fs::OpenOptionsExt;
+                      options.mode(0o600);
+                  }
+                  let mut file = options.open(&temp_path)?;
+                  file.write_all(&json)?;
+                  file.sync_all()?;
+                  drop(file);
+                  if let Err(error) = fs::rename(&temp_path, &final_path) {
+                      let _ = fs::remove_file(&temp_path);
+                      return Err(error.into());
+                  }
+                  self.prune_old_entries();
+                  Ok(final_path)
+              }
+
+              fn prune_old_entries(&self) {
+                  let Ok(entries) = fs::read_dir(&self.directory) else {
+                      return;
+                  };
+                  let mut paths = entries
+                      .filter_map(Result::ok)
+                      .map(|entry| entry.path())
+                      .filter(|path| is_snapshot_path(path))
+                      .collect::<Vec<_>>();
+                  paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
+                  for path in paths.into_iter().skip(self.max_entries) {
+                      let _ = fs::remove_file(path);
+                  }
+              }
+          }
+
+          /// Restore the newest snapshot when it belongs to the active model;
+          /// otherwise create a new generation from the final runtime config.
+          pub fn resolve_or_create_session_snapshot(
+              session_info: &SessionInfo,
+              config: &SamplerConfig,
+              effective_context_window: u64,
+          ) -> SnapshotResolution {
+              let store = session_store(session_info);
+              match store.load_latest() {
+                  Ok(Some(snapshot)) if snapshot.model_id == config.model => {
+                      return SnapshotResolution {
+                          snapshot,
+                          kind: SnapshotResolutionKind::Restored,
+                      };
+                  }
+                  Ok(Some(snapshot)) => {
+                      tracing::info!(
+                          session_id = %session_info.id.0,
+                          persisted_model = %snapshot.model_id,
+                          active_model = %config.model,
+                          "session model changed; creating a new frozen model snapshot"
+                      );
+                  }
+                  Ok(None) => {}
+                  Err(error) => {
+                      tracing::warn!(
+                          session_id = %session_info.id.0,
+                          error = %error,
+                          "failed to load session model snapshot; rebuilding from runtime config"
+                      );
+                  }
+              }
+
+              let snapshot = build_snapshot(config, effective_context_window);
+              if let Err(error) = store.store(&snapshot) {
+                  tracing::warn!(
+                      session_id = %session_info.id.0,
+                      error = %error,
+                      "failed to persist session model snapshot; using in-memory frozen values"
+                  );
+              }
+              SnapshotResolution {
+                  snapshot,
+                  kind: SnapshotResolutionKind::Created,
+              }
+          }
+
+          /// Persist a new snapshot generation after an explicit setModel action.
+          pub fn persist_explicit_model_switch(
+              session_info: &SessionInfo,
+              config: &SamplerConfig,
+              effective_context_window: u64,
+          ) -> ResolvedSessionModelSnapshot {
+              let snapshot = build_snapshot(config, effective_context_window);
+              if let Err(error) = session_store(session_info).store(&snapshot) {
+                  tracing::warn!(
+                      session_id = %session_info.id.0,
+                      model = %config.model,
+                      error = %error,
+                      "failed to persist explicit model-switch snapshot"
+                  );
+              }
+              snapshot
+          }
+
+          /// Apply only the non-secret runtime contract. Endpoints, credentials,
+          /// request headers, retry policy and client identity remain freshly resolved.
+          pub fn apply_snapshot_to_sampler_config(
+              config: &mut SamplerConfig,
+              snapshot: &ResolvedSessionModelSnapshot,
+          ) -> bool {
+              if config.model != snapshot.model_id {
+                  tracing::warn!(
+                      active_model = %config.model,
+                      snapshot_model = %snapshot.model_id,
+                      "refusing to apply a session model snapshot for a different model"
+                  );
+                  return false;
+              }
+              config.api_backend = snapshot.api_backend.clone();
+              config.provider_extensions = snapshot.provider_extensions.clone();
+              config.context_window = snapshot.context_window;
+              config.max_completion_tokens = snapshot.max_completion_tokens;
+              true
+          }
+
+          fn session_store(session_info: &SessionInfo) -> SessionModelSnapshotStore {
+              SessionModelSnapshotStore::new(
+                  crate::session::persistence::session_dir(session_info).join(SNAPSHOT_DIRECTORY),
+              )
+          }
+
+          fn build_snapshot(
+              config: &SamplerConfig,
+              effective_context_window: u64,
+          ) -> ResolvedSessionModelSnapshot {
+              let resolved_at_unix_ms = unix_time_ms();
+              let catalog = load_catalog_evidence(&config.model, resolved_at_unix_ms);
+              ResolvedSessionModelSnapshot {
+                  schema_version: SESSION_MODEL_SNAPSHOT_SCHEMA_VERSION,
+                  model_id: config.model.clone(),
+                  api_backend: config.api_backend.clone(),
+                  provider_extensions: config.provider_extensions.clone(),
+                  context_window: effective_context_window.max(1),
+                  max_completion_tokens: config.max_completion_tokens,
+                  catalog_metadata: catalog.metadata,
+                  catalog_origin: catalog.origin,
+                  catalog_revision: catalog.revision,
+                  catalog_fetched_at_unix_ms: catalog.fetched_at_unix_ms,
+                  catalog_expires_at_unix_ms: catalog.expires_at_unix_ms,
+                  catalog_stale: catalog.stale,
+                  resolved_at_unix_ms,
+              }
+          }
+
+          #[derive(Default)]
+          struct CatalogEvidence {
+              metadata: Option<ModelMetadata>,
+              origin: Option<String>,
+              revision: Option<String>,
+              fetched_at_unix_ms: Option<u64>,
+              expires_at_unix_ms: Option<u64>,
+              stale: bool,
+          }
+
+          fn load_catalog_evidence(model_id: &str, now_unix_ms: u64) -> CatalogEvidence {
+              let cached = match default_model_catalog_cache().load_latest(None, now_unix_ms) {
+                  Ok(Some(cached)) => cached,
+                  Ok(None) => return CatalogEvidence::default(),
+                  Err(error) => {
+                      tracing::warn!(
+                          model = model_id,
+                          error = %error,
+                          "failed to load model catalog while freezing session metadata"
+                      );
+                      return CatalogEvidence::default();
+                  }
+              };
+              CatalogEvidence {
+                  metadata: cached
+                      .document
+                      .models
+                      .iter()
+                      .find(|metadata| metadata.model_id == model_id)
+                      .cloned(),
+                  origin: Some(cached.document.origin.clone()),
+                  revision: cached.document.revision.clone(),
+                  fetched_at_unix_ms: Some(cached.document.fetched_at_unix_ms),
+                  expires_at_unix_ms: Some(cached.document.expires_at_unix_ms),
+                  stale: matches!(cached.freshness, CatalogFreshness::Stale),
+              }
+          }
+
+          fn unix_time_ms() -> u64 {
+              SystemTime::now()
+                  .duration_since(UNIX_EPOCH)
+                  .ok()
+                  .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+                  .unwrap_or(0)
+          }
+
+          fn is_snapshot_path(path: &Path) -> bool {
+              path.file_name()
+                  .and_then(|name| name.to_str())
+                  .is_some_and(|name| name.starts_with("snapshot-") && name.ends_with(".json"))
+          }
+
+          #[cfg(test)]
+          mod tests {
+              use super::*;
+
+              fn config(model: &str, context_window: u64, max_output: Option<u32>) -> SamplerConfig {
+                  SamplerConfig {
+                      model: model.to_string(),
+                      context_window,
+                      max_completion_tokens: max_output,
+                      ..Default::default()
+                  }
+              }
+
+              fn test_snapshot(
+                  model: &str,
+                  context_window: u64,
+                  max_output: Option<u32>,
+                  resolved_at_unix_ms: u64,
+              ) -> ResolvedSessionModelSnapshot {
+                  let config = config(model, context_window, max_output);
+                  ResolvedSessionModelSnapshot {
+                      schema_version: SESSION_MODEL_SNAPSHOT_SCHEMA_VERSION,
+                      model_id: config.model.clone(),
+                      api_backend: config.api_backend,
+                      provider_extensions: config.provider_extensions,
+                      context_window,
+                      max_completion_tokens: max_output,
+                      catalog_metadata: None,
+                      catalog_origin: None,
+                      catalog_revision: None,
+                      catalog_fetched_at_unix_ms: None,
+                      catalog_expires_at_unix_ms: None,
+                      catalog_stale: false,
+                      resolved_at_unix_ms,
+                  }
+              }
+
+              #[test]
+              fn snapshot_round_trips_without_credentials_or_endpoint() {
+                  let temp = tempfile::tempdir().unwrap();
+                  let store = SessionModelSnapshotStore::new(temp.path());
+                  let snapshot = test_snapshot("company/model", 262_144, Some(65_536), 100);
+                  let path = store.store(&snapshot).unwrap();
+                  let raw = fs::read_to_string(path).unwrap();
+                  assert!(!raw.contains("api_key"));
+                  assert!(!raw.contains("base_url"));
+
+                  let restored = store.load_latest().unwrap().unwrap();
+                  assert_eq!(restored.model_id, "company/model");
+                  assert_eq!(restored.context_window, 262_144);
+                  assert_eq!(restored.max_completion_tokens, Some(65_536));
+              }
+
+              #[test]
+              fn corrupt_newest_entry_falls_back_to_older_valid_snapshot() {
+                  let temp = tempfile::tempdir().unwrap();
+                  let store = SessionModelSnapshotStore::new(temp.path());
+                  store
+                      .store(&test_snapshot("model-a", 128_000, Some(8_000), 100))
+                      .unwrap();
+                  fs::write(
+                      temp.path().join("snapshot-99999999999999999999-corrupt.json"),
+                      b"{not-json",
+                  )
+                  .unwrap();
+
+                  let restored = store.load_latest().unwrap().unwrap();
+                  assert_eq!(restored.model_id, "model-a");
+                  assert_eq!(restored.context_window, 128_000);
+              }
+
+              #[test]
+              fn newest_model_switch_generation_wins() {
+                  let temp = tempfile::tempdir().unwrap();
+                  let store = SessionModelSnapshotStore::new(temp.path()).with_max_entries(4);
+                  store
+                      .store(&test_snapshot("model-a", 128_000, Some(8_000), 100))
+                      .unwrap();
+                  store
+                      .store(&test_snapshot("model-b", 256_000, Some(16_000), 200))
+                      .unwrap();
+
+                  let restored = store.load_latest().unwrap().unwrap();
+                  assert_eq!(restored.model_id, "model-b");
+                  assert_eq!(restored.context_window, 256_000);
+              }
+
+              #[test]
+              fn restored_snapshot_overrides_refreshed_runtime_limits() {
+                  let snapshot = test_snapshot("model-a", 128_000, Some(8_000), 100);
+                  let mut refreshed = config("model-a", 512_000, Some(64_000));
+                  assert!(apply_snapshot_to_sampler_config(&mut refreshed, &snapshot));
+                  assert_eq!(refreshed.context_window, 128_000);
+                  assert_eq!(refreshed.max_completion_tokens, Some(8_000));
+              }
+
+              #[test]
+              fn snapshot_for_another_model_is_rejected() {
+                  let snapshot = test_snapshot("model-a", 128_000, Some(8_000), 100);
+                  let mut config = config("model-b", 256_000, Some(16_000));
+                  assert!(!apply_snapshot_to_sampler_config(&mut config, &snapshot));
+                  assert_eq!(config.context_window, 256_000);
+              }
+          }
+          RS
+
+          cat > docs/architecture/session-frozen-model-metadata.md <<'MD'
+          # Session-frozen model metadata
+
+          DTTN freezes the non-secret runtime model contract when a session is created.
+          The snapshot contains the routing model, protocol, provider extensions, context
+          window, maximum output, and the current catalog capability/pricing evidence.
+
+          Snapshots are append-only JSON files under the session directory. Writes use a
+          temporary file followed by a same-directory rename, so readers on macOS and
+          Windows either observe a complete snapshot or fall back to the previous valid
+          generation. API keys, request headers, cookies, bearer tokens and full provider
+          URLs are never persisted.
+
+          On resume, the newest valid snapshot is restored before Chat State, the sampler
+          actor and compaction policy are initialized. Provider metadata refreshes may
+          update the shared model catalog for future sessions, but cannot change limits or
+          protocol in the active session. An explicit model switch creates a new snapshot
+          generation and becomes the new resume point.
+
+          This is the authoritative input for the later status-runtime snapshot and cost
+          segments. Provider billing values remain live telemetry and are not part of the
+          frozen model contract.
+          MD
+
+          cat > .github/workflows/phase5-session-model-snapshot.yml <<'YML'
+          name: DTTN Phase 5 Session Model Snapshot
+
+          on:
+            pull_request:
+              branches:
+                - main
+
+          concurrency:
+            group: dttn-phase5-${{ github.event.pull_request.number }}
+            cancel-in-progress: true
+
+          permissions:
+            contents: read
+
+          jobs:
+            validate-session-model-snapshot:
+              if: github.head_ref == 'refactor/dttn-session-model-snapshot-phase-5'
+              runs-on: ubuntu-latest
+              timeout-minutes: 45
+              steps:
+                - name: Checkout branch
+                  uses: actions/checkout@v6
+                  with:
+                    ref: ${{ github.head_ref }}
+                    fetch-depth: 0
+
+                - name: Install protoc
+                  run: |
+                    sudo apt-get update
+                    sudo apt-get install --yes protobuf-compiler
+
+                - name: Validate session-frozen model metadata
+                  shell: bash
+                  run: |
+                    set -o pipefail
+                    {
+                      git fetch origin "${{ github.base_ref }}" --depth=1
+                      mapfile -t changed_rust < <(
+                        git diff --name-only --diff-filter=ACM \
+                          "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
+                      )
+                      if (( ${#changed_rust[@]} > 0 )); then
+                        rustfmt --edition 2024 --check "${changed_rust[@]}"
+                      fi
+                      cargo test -p xai-grok-shell session_model_snapshot --lib
+                      cargo check -p xai-grok-pager-bin --bin dttn
+                      git diff --check "origin/${{ github.base_ref }}...HEAD"
+                    } 2>&1 | tee phase5-validation.log
+
+                - name: Upload validation diagnostics
+                  if: always()
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: dttn-phase5-session-model-snapshot-diagnostics
+                    path: phase5-validation.log
+                    if-no-files-found: warn
+                    retention-days: 7
+          YML
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected exactly one match in {path}, found {text.count(old)}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/mod.rs",
+              "pub mod prompt_queue;\n",
+              "pub mod prompt_queue;\npub mod session_model_snapshot;\n",
+          )
+
+          spawn_path = "crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs"
+          replace_once(
+              spawn_path,
+              "    sampling_config: SamplingConfig,\n",
+              "    mut sampling_config: SamplingConfig,\n",
+          )
+          replace_once(
+              spawn_path,
+              '''    if max_turns == Some(0) {
+                  return Err(xai_grok_agent::AgentBuildError::InvalidConfig(
+                      "max_turns must be greater than 0".to_string(),
+                  ));
+              }
+              let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+          ''',
+              '''    if max_turns == Some(0) {
+                  return Err(xai_grok_agent::AgentBuildError::InvalidConfig(
+                      "max_turns must be greater than 0".to_string(),
+                  ));
+              }
+              let requested_context_window_override = std::env::var("GROK_DEBUG_CONTEXT_WINDOW")
+                  .ok()
+                  .and_then(|value| value.parse::<u64>().ok())
+                  .and_then(std::num::NonZeroU64::new);
+              let configured_context_window = std::num::NonZeroU64::new(sampling_config.context_window)
+                  .unwrap_or_else(|| {
+                      std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
+                          .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
+                  });
+              let requested_context_window = requested_context_window_override
+                  .unwrap_or(configured_context_window)
+                  .get();
+              let snapshot_resolution =
+                  crate::session::session_model_snapshot::resolve_or_create_session_snapshot(
+                      &session_info,
+                      &sampling_config,
+                      requested_context_window,
+                  );
+              crate::session::session_model_snapshot::apply_snapshot_to_sampler_config(
+                  &mut sampling_config,
+                  &snapshot_resolution.snapshot,
+              );
+              let context_window_override = match snapshot_resolution.kind {
+                  crate::session::session_model_snapshot::SnapshotResolutionKind::Created => {
+                      requested_context_window_override
+                  }
+                  crate::session::session_model_snapshot::SnapshotResolutionKind::Restored => {
+                      if let Some(requested) = requested_context_window_override
+                          && requested.get() != snapshot_resolution.snapshot.context_window
+                      {
+                          tracing::warn!(
+                              requested_context_window = requested.get(),
+                              frozen_context_window = snapshot_resolution.snapshot.context_window,
+                              "ignoring debug context override for restored session"
+                          );
+                      }
+                      None
+                  }
+              };
+              tracing::info!(
+                  session_id = %session_info.id.0,
+                  model = %snapshot_resolution.snapshot.model_id,
+                  context_window = snapshot_resolution.snapshot.context_window,
+                  max_completion_tokens = ?snapshot_resolution.snapshot.max_completion_tokens,
+                  snapshot_state = ?snapshot_resolution.kind,
+                  catalog_stale = snapshot_resolution.snapshot.catalog_stale,
+                  "session model contract frozen"
+              );
+              let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+          ''',
+          )
+          replace_once(
+              spawn_path,
+              '''    let context_window_override = std::env::var("GROK_DEBUG_CONTEXT_WINDOW")
+                  .ok()
+                  .and_then(|v| v.parse::<u64>().ok())
+                  .and_then(std::num::NonZeroU64::new);
+              let baseline_context_window = std::num::NonZeroU64::new(sampling_config.context_window)
+                  .unwrap_or_else(|| {
+                      std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
+                          .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
+                  });
+              if let Some(cw) = context_window_override {
+                  tracing::warn!(
+                      override_context_window = cw.get(),
+                      original_context_window = baseline_context_window.get(),
+                      "GROK_DEBUG_CONTEXT_WINDOW override active"
+                  );
+              }
+          ''',
+              '''    let baseline_context_window = std::num::NonZeroU64::new(sampling_config.context_window)
+                  .unwrap_or_else(|| {
+                      std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
+                          .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
+                  });
+          ''',
+          )
+          replace_once(
+              spawn_path,
+              "        context_window: context_window_override.unwrap_or(baseline_context_window),\n",
+              "        context_window: baseline_context_window,\n",
+          )
+          replace_once(
+              spawn_path,
+              '''    let context_window_tokens = context_window_override
+                  .map(|c| c.get())
+                  .unwrap_or(sampling_config.context_window);
+          ''',
+              '''    let context_window_tokens = sampling_config.context_window;
+          ''',
+          )
+
+          model_switch_path = (
+              "crates/codegen/xai-grok-shell/src/session/acp_session_impl/model_switch.rs"
+          )
+          replace_once(
+              model_switch_path,
+              '''        let prev_threshold = self.compaction.threshold_percent.get();
+          ''',
+              '''        crate::session::session_model_snapshot::persist_explicit_model_switch(
+                  &self.session_info,
+                  &sampling_config,
+                  new_context_window.get(),
+              );
+              let prev_threshold = self.compaction.threshold_percent.get();
+          ''',
+          )
+
+          setup_path = "crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_setup.rs"
+          setup = Path(setup_path)
+          text = setup.read_text()
+          auth_helper = '''    /// `true` for session-based ACP auth methods.
+              fn is_session_based_auth(&self) -> bool {
+                  self.auth_method_id
+                      .load()
+                      .as_deref()
+                      .is_some_and(crate::agent::auth_method::is_session_based_method)
+              }
+          '''
+          if text.count(auth_helper) != 1:
+              raise SystemExit("failed to locate is_session_based_auth helper")
+          text = text.replace(auth_helper, "", 1)
+
+          start = text.index("    /// Idle threshold for proactive model metadata refresh on session resume.")
+          end = text.index("    /// Update cached sampling config if model metadata changed", start)
+          text = text[:start] + '''    /// Record the current time as the last API request timestamp.
+              pub(super) fn record_api_request_time(&self) {
+                  let now_ms = chrono::Utc::now().timestamp_millis();
+                  self.last_api_request_at
+                      .store(now_ms, std::sync::atomic::Ordering::Relaxed);
+              }
+              /// Current sessions keep their frozen model contract. Idle detection is
+              /// retained only as an observability signal; catalog refreshes are consumed
+              /// by new sessions or an explicit model switch.
+              pub(super) async fn maybe_refresh_model_metadata_on_resume(&self) {
+                  const IDLE_REFRESH_THRESHOLD_SECS: i64 = 600;
+                  let last_request_ms = self
+                      .last_api_request_at
+                      .load(std::sync::atomic::Ordering::Relaxed);
+                  if last_request_ms == 0 {
+                      return;
+                  }
+                  let idle_secs = (chrono::Utc::now().timestamp_millis() - last_request_ms) / 1000;
+                  if idle_secs >= IDLE_REFRESH_THRESHOLD_SECS {
+                      tracing::debug!(
+                          session_id = %self.session_info.id.0,
+                          idle_secs,
+                          "session model metadata is frozen; idle refresh deferred to future sessions"
+                      );
+                  }
+              }
+          ''' + text[end:]
+
+          start = text.index("    pub(super) async fn handle_model_metadata_update(")
+          end = text.index("    /// Inject the actor's managed Read-deny globs", start)
+          text = text[:start] + '''    pub(super) async fn handle_model_metadata_update(
+                  &self,
+                  metadata: crate::sampling::ResponseModelMetadata,
+              ) {
+                  if let Some(ref etag) = metadata.models_etag {
+                      self.models_manager.refresh_if_new_etag(etag.clone()).await;
+                  }
+                  let Some(current_config) = self.chat_state_handle.get_sampling_config().await else {
+                      return;
+                  };
+                  let context_changed = metadata
+                      .context_window
+                      .is_some_and(|value| value != current_config.context_window.get());
+                  let output_changed = metadata
+                      .max_completion_tokens
+                      .is_some_and(|value| Some(value) != current_config.max_completion_tokens);
+                  if context_changed || output_changed {
+                      tracing::info!(
+                          session_id = %self.session_info.id.0,
+                          model = %current_config.model,
+                          frozen_context_window = current_config.context_window.get(),
+                          observed_context_window = ?metadata.context_window,
+                          frozen_max_completion_tokens = ?current_config.max_completion_tokens,
+                          observed_max_completion_tokens = ?metadata.max_completion_tokens,
+                          "provider metadata changed; current session remains frozen"
+                      );
+                  }
+              }
+          ''' + text[end:]
+          setup.write_text(text)
+          PY
+
+          rustfmt --edition 2024 \
+            crates/codegen/xai-grok-shell/src/session/session_model_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/mod.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/model_switch.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_setup.rs
+
+          cargo test -p xai-grok-shell session_model_snapshot --lib
+          cargo check -p xai-grok-pager-bin --bin dttn
+          git diff --check
+
+          git add \
+            .github/workflows/phase5-session-model-snapshot.yml \
+            docs/architecture/session-frozen-model-metadata.md \
+            crates/codegen/xai-grok-shell/src/session/mod.rs \
+            crates/codegen/xai-grok-shell/src/session/session_model_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/model_switch.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_setup.rs
+          git commit -m "feat: freeze resolved model metadata per session"
+          git push \
+            --force-with-lease="refs/heads/${FEATURE_BRANCH}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${FEATURE_BRANCH}"
