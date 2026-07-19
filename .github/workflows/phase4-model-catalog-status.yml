@@ -24,6 +24,11 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
       - name: Validate model catalog and telemetry contracts
         shell: bash
         run: |
