@@ -27,10 +27,15 @@ jobs:
           from pathlib import Path
 
           source = Path('.github/workflows/implement-session-model-snapshot.yml').read_text()
-          marker = '        run: |\n'
-          if marker not in source:
-              raise SystemExit('implementation workflow has no run block')
-          block = source.rsplit(marker, 1)[1]
+          anchor = '      - name: Apply Phase 5 implementation\n'
+          run_marker = '        run: |\n'
+          anchor_at = source.find(anchor)
+          if anchor_at < 0:
+              raise SystemExit('implementation workflow has no Apply Phase 5 implementation step')
+          run_at = source.find(run_marker, anchor_at + len(anchor))
+          if run_at < 0:
+              raise SystemExit('implementation step has no run block')
+          block = source[run_at + len(run_marker):]
           lines = []
           for line in block.splitlines():
               if line.startswith('          '):
