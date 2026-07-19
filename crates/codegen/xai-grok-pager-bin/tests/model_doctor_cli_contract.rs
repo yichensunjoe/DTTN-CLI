@@ -34,12 +34,7 @@ fn model_refresh_help_is_successful_and_exposes_safe_credential_input() {
 #[test]
 fn inline_catalog_token_argument_is_rejected_without_echoing_its_value() {
     const SECRET_MARKER: &str = "DTTN_INLINE_SECRET_MUST_NOT_ECHO";
-    let output = run_dttn(&[
-        "doctor",
-        "model-refresh",
-        "--token",
-        SECRET_MARKER,
-    ]);
+    let output = run_dttn(&["doctor", "model-refresh", "--token", SECRET_MARKER]);
     let rendered = combined_output(&output);
 
     assert!(!output.status.success());
