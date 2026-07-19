@@ -228,14 +228,14 @@ fn validate_model_refresh_args(args: &ModelRefreshArgs) -> Result<()> {
     Ok(())
 }
 
-fn inference_catalog_credential(
-    sampler: &SamplerConfig,
-) -> Result<Option<CatalogCredential>> {
+fn inference_catalog_credential(sampler: &SamplerConfig) -> Result<Option<CatalogCredential>> {
     match (sampler.auth_scheme, sampler.api_key.as_deref()) {
         (AuthScheme::Bearer, Some(token)) => {
             Ok(Some(CatalogCredential::bearer(token.to_string())?))
         }
-        (AuthScheme::Bearer | AuthScheme::XApiKey, None) | (AuthScheme::XApiKey, Some(_)) => Ok(None),
+        (AuthScheme::Bearer | AuthScheme::XApiKey, None) | (AuthScheme::XApiKey, Some(_)) => {
+            Ok(None)
+        }
     }
 }
 
@@ -303,13 +303,8 @@ mod tests {
 
     #[test]
     fn registry_refresh_requires_an_explicit_metadata_url() {
-        let args = parse_refresh_args([
-            "dttn",
-            "doctor",
-            "model-refresh",
-            "--kind",
-            "dttn-registry",
-        ]);
+        let args =
+            parse_refresh_args(["dttn", "doctor", "model-refresh", "--kind", "dttn-registry"]);
 
         let error = validate_model_refresh_args(&args).unwrap_err().to_string();
         assert!(error.contains("--metadata-url is required"));
@@ -345,9 +340,7 @@ mod tests {
             auth_scheme: AuthScheme::XApiKey,
             ..Default::default()
         };
-        assert!(inference_catalog_credential(&x_api_key)
-            .unwrap()
-            .is_none());
+        assert!(inference_catalog_credential(&x_api_key).unwrap().is_none());
     }
 
     #[test]
