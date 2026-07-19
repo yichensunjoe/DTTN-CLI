@@ -1,0 +1,54 @@
+name: Rebase DTTN PR 3 after PR 2
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/rebase-pr3-after-pr2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rebase-pr3:
+    if: github.head_ref == 'automation/rebase-pr3-after-pr2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Rebase PR 3 onto updated main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly expected_main='6e1cb71fa1371e3ac0eb87a1b399dac808768618'
+          readonly old_phase2='40548adf887857af0161121203feab743594a322'
+          readonly old_phase3='a039835a08fe599d56a97879ba4fea6dcbd3e862'
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/heads/refactor/dttn-model-catalog-status-phase-4:refs/remotes/origin/refactor/dttn-model-catalog-status-phase-4'
+
+          test "$(git rev-parse origin/main)" = "$expected_main"
+          test "$(git rev-parse origin/refactor/dttn-model-catalog-status-phase-4)" = "$old_phase3"
+
+          git switch --detach "$old_phase3"
+          git switch -C phase4-clean
+          git rebase --onto origin/main "$old_phase2"
+          readonly new_phase4="$(git rev-parse HEAD)"
+
+          git push \
+            --force-with-lease=refs/heads/refactor/dttn-model-catalog-status-phase-4:"$old_phase3" \
+            origin \
+            phase4-clean:refs/heads/refactor/dttn-model-catalog-status-phase-4
+
+          printf 'PR #3 rebased to %s\n' "$new_phase4"
