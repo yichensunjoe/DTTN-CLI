@@ -11,7 +11,7 @@ use std::sync::Arc;
 use xai_grok_agent::prompt::skills::SkillsConfig;
 use xai_grok_sampler::{AuthScheme, SamplerConfig};
 use xai_grok_sampling_types::{
-    CompactionAtTokens, CompactionsRemaining, REASONING_EFFORT_META_KEY,
+    CompactionAtTokens, CompactionsRemaining, ProviderExtensions, REASONING_EFFORT_META_KEY,
     REASONING_EFFORTS_META_KEY, ReasoningEffort, ReasoningEffortOption,
     reasoning_effort_meta_value, reasoning_efforts_meta_value,
 };
@@ -551,14 +551,8 @@ impl Default for EndpointsConfig {
             )
             .unwrap_or_else(|| XAI_API_BASE_URL_DEFAULT.to_owned()),
             alpha_test_key: None,
-            models_base_url: env_string_with_legacy(
-                "DTTN_MODELS_BASE_URL",
-                "GROK_MODELS_BASE_URL",
-            ),
-            models_list_url: env_string_with_legacy(
-                "DTTN_MODELS_LIST_URL",
-                "GROK_MODELS_LIST_URL",
-            ),
+            models_base_url: env_string_with_legacy("DTTN_MODELS_BASE_URL", "GROK_MODELS_BASE_URL"),
+            models_list_url: env_string_with_legacy("DTTN_MODELS_LIST_URL", "GROK_MODELS_LIST_URL"),
             feedback_base_url: env_string_with_legacy(
                 "DTTN_FEEDBACK_BASE_URL",
                 "GROK_FEEDBACK_BASE_URL",
@@ -584,10 +578,7 @@ impl Default for EndpointsConfig {
                 "DTTN_TRACE_UPLOAD_ENDPOINT_URL",
                 "GROK_TRACE_UPLOAD_ENDPOINT_URL",
             ),
-            deployment_key: env_string_with_legacy(
-                "DTTN_DEPLOYMENT_KEY",
-                "GROK_DEPLOYMENT_KEY",
-            ),
+            deployment_key: env_string_with_legacy("DTTN_DEPLOYMENT_KEY", "GROK_DEPLOYMENT_KEY"),
             managed_config_url: env_string_with_legacy(
                 "DTTN_MANAGED_CONFIG_URL",
                 "GROK_MANAGED_CONFIG_URL",
@@ -3396,6 +3387,8 @@ struct DefaultModelJson {
     top_p: Option<f32>,
     max_completion_tokens: Option<u32>,
     api_backend: ApiBackend,
+    #[serde(default)]
+    provider_extensions: ProviderExtensions,
     #[serde(default = "default_agent_type")]
     agent_type: String,
     inference_idle_timeout_secs: Option<u64>,
@@ -3456,6 +3449,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 top_p: m.top_p,
                 max_completion_tokens: m.max_completion_tokens,
                 api_backend: m.api_backend,
+                provider_extensions: m.provider_extensions,
                 auth_scheme: None,
                 agent_type: m.agent_type,
                 inference_idle_timeout_secs: m.inference_idle_timeout_secs,
@@ -3514,6 +3508,9 @@ pub struct ModelEntryConfig {
     /// Values: "chat_completions" (default), "responses"
     #[serde(default)]
     pub api_backend: ApiBackend,
+    /// Provider-private extensions independent from the API protocol shape.
+    #[serde(default)]
+    pub provider_extensions: ProviderExtensions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_scheme: Option<AuthScheme>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3629,6 +3626,7 @@ pub struct ConfigModelOverride {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: Option<ApiBackend>,
+    pub provider_extensions: Option<ProviderExtensions>,
     #[serde(default)]
     pub extra_headers: IndexMap<String, String>,
     pub context_window: Option<u64>,
@@ -3691,6 +3689,9 @@ impl ConfigModelOverride {
         }
         if let Some(ref v) = self.api_backend {
             entry.info.api_backend = v.clone();
+        }
+        if let Some(v) = self.provider_extensions {
+            entry.info.provider_extensions = v;
         }
         if !self.extra_headers.is_empty() {
             entry.info.extra_headers = self.extra_headers.clone();
@@ -3779,6 +3780,7 @@ pub struct ModelInfo {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: ApiBackend,
+    pub provider_extensions: ProviderExtensions,
     pub auth_scheme: AuthScheme,
     pub extra_headers: IndexMap<String, String>,
     pub context_window: NonZeroU64,
@@ -3844,6 +3846,7 @@ impl ModelInfo {
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::default(),
+            provider_extensions: ProviderExtensions::default(),
             auth_scheme: Default::default(),
             extra_headers: IndexMap::new(),
             context_window: NonZeroU64::new(200_000).unwrap(),
@@ -3879,6 +3882,7 @@ impl ModelInfo {
             temperature: entry.temperature,
             top_p: entry.top_p,
             api_backend: entry.api_backend.clone(),
+            provider_extensions: entry.provider_extensions,
             auth_scheme: entry.auth_scheme.unwrap_or_default(),
             extra_headers: entry.extra_headers.clone(),
             context_window: entry.context_window,
@@ -4563,6 +4567,7 @@ pub fn resolve_aux_model_sampling_config(
                 temperature: None,
                 top_p: None,
                 api_backend: ApiBackend::Responses,
+                provider_extensions: Default::default(),
                 auth_scheme: Default::default(),
                 extra_headers: IndexMap::new(),
                 context_window: NonZeroU64::new(200_000).unwrap(),
@@ -4691,6 +4696,7 @@ pub fn sampling_config_for_model(
         temperature,
         top_p,
         api_backend,
+        provider_extensions: info.provider_extensions,
         auth_scheme: credentials.auth_scheme,
         extra_headers,
         context_window: info.context_window.get(),
@@ -4785,6 +4791,7 @@ fn resolve_hidden_default_web_search_sampling_config(
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::Responses,
+            provider_extensions: Default::default(),
             auth_scheme: Default::default(),
             extra_headers: IndexMap::new(),
             context_window: NonZeroU64::new(200_000).unwrap(),

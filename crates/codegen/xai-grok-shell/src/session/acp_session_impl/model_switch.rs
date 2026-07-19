@@ -53,6 +53,7 @@ impl SessionActor {
                 temperature: sampling_config.temperature,
                 top_p: sampling_config.top_p,
                 api_backend: sampling_config.api_backend.clone(),
+                provider_extensions: sampling_config.provider_extensions,
                 extra_headers: sampling_config.extra_headers.clone(),
                 context_window: new_context_window,
                 reasoning_effort: sampling_config.reasoning_effort,

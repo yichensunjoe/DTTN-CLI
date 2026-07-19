@@ -1029,6 +1029,26 @@ impl ApiBackend {
     }
 }
 
+/// Provider-private wire extensions layered on top of the standard API shape.
+///
+/// `ApiBackend` chooses the request/response protocol. This enum independently
+/// controls non-standard headers and body fields. `Auto` preserves compatibility
+/// for official xAI/Grok hosts while treating every other endpoint as standard.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderExtensions {
+    #[default]
+    Auto,
+    Standard,
+    Xai,
+}
+
+impl ProviderExtensions {
+    pub const fn uses_xai(self) -> bool {
+        matches!(self, Self::Xai)
+    }
+}
+
 /// Sampling client configuration (API key excluded — that stays in the client).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SamplingConfig {
@@ -1040,6 +1060,9 @@ pub struct SamplingConfig {
     /// Which API backend to use for this model
     #[serde(default)]
     pub api_backend: ApiBackend,
+    /// Provider-private extensions, resolved by the sampler before requests.
+    #[serde(default)]
+    pub provider_extensions: ProviderExtensions,
     /// Extra headers to send with requests (e.g., for BYOK scenarios).
     #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
     pub extra_headers: indexmap::IndexMap<String, String>,

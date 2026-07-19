@@ -77,8 +77,23 @@ mod tests {
     fn distribution_defaults_resolve_to_agnes() {
         assert_eq!(default_model(), DISTRIBUTION_DEFAULT_MODEL);
         assert_eq!(default_web_search_model(), DISTRIBUTION_DEFAULT_MODEL);
-        assert_eq!(default_image_description_model(), DISTRIBUTION_DEFAULT_MODEL);
+        assert_eq!(
+            default_image_description_model(),
+            DISTRIBUTION_DEFAULT_MODEL
+        );
         assert_eq!(default_session_summary_model(), DISTRIBUTION_DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn agnes_catalog_matches_documented_public_api_contract() {
+        let catalog: serde_json::Value = serde_json::from_str(DEFAULT_MODELS_JSON).unwrap();
+        let model = &catalog["models"][0];
+
+        assert_eq!(model["model"], "agnes-2.0-flash");
+        assert_eq!(model["api_backend"], "chat_completions");
+        assert_eq!(model["provider_extensions"], "standard");
+        assert_eq!(model["context_window"], 262_144);
+        assert_eq!(model["max_completion_tokens"], 65_536);
     }
 
     #[test]
