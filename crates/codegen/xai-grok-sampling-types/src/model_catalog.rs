@@ -268,10 +268,7 @@ impl ModelMetadata {
         merge_field(&mut self.context_window, candidate.context_window);
         merge_field(&mut self.max_input_tokens, candidate.max_input_tokens);
         merge_field(&mut self.max_output_tokens, candidate.max_output_tokens);
-        merge_field(
-            &mut self.default_temperature,
-            candidate.default_temperature,
-        );
+        merge_field(&mut self.default_temperature, candidate.default_temperature);
         merge_field(&mut self.max_temperature, candidate.max_temperature);
         merge_capabilities(&mut self.capabilities, candidate.capabilities);
         merge_pricing(&mut self.pricing, candidate.pricing);
@@ -368,10 +365,7 @@ mod tests {
     fn verified_registry_cannot_replace_provider_api() {
         let mut resolved = metadata(MetadataSource::ProviderApi, 256_000);
         resolved
-            .merge(metadata(
-                MetadataSource::VerifiedPublicRegistry,
-                128_000,
-            ))
+            .merge(metadata(MetadataSource::VerifiedPublicRegistry, 128_000))
             .unwrap();
         assert_eq!(resolved.context_window.unwrap().value, 256_000);
     }
@@ -399,10 +393,7 @@ mod tests {
     #[test]
     fn pricing_merge_is_field_level_and_source_aware() {
         let mut resolved = metadata(MetadataSource::BuiltIn, 128_000);
-        resolved.pricing.currency = Some(Sourced::new(
-            "USD".to_string(),
-            MetadataSource::BuiltIn,
-        ));
+        resolved.pricing.currency = Some(Sourced::new("USD".to_string(), MetadataSource::BuiltIn));
         resolved.pricing.input_per_million_microunits =
             Some(Sourced::new(3_000_000, MetadataSource::BuiltIn));
 
@@ -414,11 +405,7 @@ mod tests {
         resolved.merge(provider).unwrap();
 
         assert_eq!(
-            resolved
-                .pricing
-                .input_per_million_microunits
-                .unwrap()
-                .value,
+            resolved.pricing.input_per_million_microunits.unwrap().value,
             2_000_000
         );
         assert_eq!(
@@ -434,10 +421,7 @@ mod tests {
     #[test]
     fn estimates_cost_without_floating_point_drift() {
         let pricing = ModelPricing {
-            currency: Some(Sourced::new(
-                "USD".to_string(),
-                MetadataSource::ProviderApi,
-            )),
+            currency: Some(Sourced::new("USD".to_string(), MetadataSource::ProviderApi)),
             input_per_million_microunits: Some(Sourced::new(
                 2_000_000,
                 MetadataSource::ProviderApi,
@@ -469,10 +453,7 @@ mod tests {
     #[test]
     fn unknown_non_zero_price_bucket_hides_cost() {
         let pricing = ModelPricing {
-            currency: Some(Sourced::new(
-                "USD".to_string(),
-                MetadataSource::ProviderApi,
-            )),
+            currency: Some(Sourced::new("USD".to_string(), MetadataSource::ProviderApi)),
             input_per_million_microunits: Some(Sourced::new(
                 2_000_000,
                 MetadataSource::ProviderApi,
