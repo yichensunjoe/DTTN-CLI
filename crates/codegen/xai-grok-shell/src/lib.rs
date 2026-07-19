@@ -27,6 +27,7 @@ pub mod instrumentation;
 pub mod leader;
 pub mod managed_config;
 pub mod mcp_doctor;
+pub mod model_catalog_runtime;
 pub use xai_grok_models as models;
 pub mod plugin;
 pub mod relay;
