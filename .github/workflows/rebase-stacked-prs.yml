@@ -1,0 +1,66 @@
+name: Rebase stacked DTTN PRs
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/rebase-stacked-prs.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rebase-stacked-prs:
+    if: github.head_ref == 'automation/rebase-stacked-prs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Rebase PR 2 and PR 3 atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly expected_main='1c54744ef2e7c98dcd61d2dc25068db1d126c7ae'
+          readonly old_phase1='e56fcdfd1fe9d4d2943e4796ced8f5d6ead46d3c'
+          readonly old_phase2='a552b4caeba4b69a4d18bbdf3f8439304e84b444'
+          readonly old_phase3='fd98a227df29395eb56f4a5fba71831720c21ac7'
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/heads/refactor/dttn-core-phase-1:refs/remotes/origin/refactor/dttn-core-phase-1' \
+            '+refs/heads/refactor/dttn-model-provider-phase-3:refs/remotes/origin/refactor/dttn-model-provider-phase-3' \
+            '+refs/heads/refactor/dttn-model-catalog-status-phase-4:refs/remotes/origin/refactor/dttn-model-catalog-status-phase-4'
+
+          test "$(git rev-parse origin/main)" = "$expected_main"
+          test "$(git rev-parse origin/refactor/dttn-core-phase-1)" = "$old_phase1"
+          test "$(git rev-parse origin/refactor/dttn-model-provider-phase-3)" = "$old_phase2"
+          test "$(git rev-parse origin/refactor/dttn-model-catalog-status-phase-4)" = "$old_phase3"
+
+          git switch --detach "$old_phase2"
+          git switch -C phase2-clean
+          git rebase --onto origin/main "$old_phase1"
+          readonly new_phase2="$(git rev-parse HEAD)"
+
+          git switch --detach "$old_phase3"
+          git switch -C phase3-clean
+          git rebase --onto "$new_phase2" "$old_phase2"
+          readonly new_phase3="$(git rev-parse HEAD)"
+
+          git push --atomic \
+            --force-with-lease=refs/heads/refactor/dttn-model-provider-phase-3:"$old_phase2" \
+            --force-with-lease=refs/heads/refactor/dttn-model-catalog-status-phase-4:"$old_phase3" \
+            origin \
+            phase2-clean:refs/heads/refactor/dttn-model-provider-phase-3 \
+            phase3-clean:refs/heads/refactor/dttn-model-catalog-status-phase-4
+
+          printf 'PR #2 rebased to %s\nPR #3 rebased to %s\n' "$new_phase2" "$new_phase3"
