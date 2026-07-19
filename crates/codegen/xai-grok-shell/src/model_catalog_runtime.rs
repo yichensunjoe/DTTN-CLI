@@ -64,7 +64,9 @@ pub fn parse_dttn_registry_catalog(
     payload: &Value,
     options: &CatalogParseOptions<'_>,
 ) -> Result<Vec<ModelMetadata>, CatalogParseError> {
-    let root = payload.as_object().ok_or(CatalogParseError::RootNotObject)?;
+    let root = payload
+        .as_object()
+        .ok_or(CatalogParseError::RootNotObject)?;
     let schema = root
         .get("schema_version")
         .and_then(Value::as_u64)
@@ -86,7 +88,9 @@ fn parse_catalog_array(
     source: MetadataSource,
     options: &CatalogParseOptions<'_>,
 ) -> Result<Vec<ModelMetadata>, CatalogParseError> {
-    let root = payload.as_object().ok_or(CatalogParseError::RootNotObject)?;
+    let root = payload
+        .as_object()
+        .ok_or(CatalogParseError::RootNotObject)?;
     let entries = root
         .get(array_key)
         .and_then(Value::as_array)
@@ -240,9 +244,7 @@ fn parse_pricing(
 
 fn parse_protocol(value: &str) -> Option<ModelProtocol> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "chat_completions" | "chat-completions" | "chat" => {
-            Some(ModelProtocol::ChatCompletions)
-        }
+        "chat_completions" | "chat-completions" | "chat" => Some(ModelProtocol::ChatCompletions),
         "responses" | "response" => Some(ModelProtocol::Responses),
         "messages" | "anthropic_messages" | "anthropic-messages" => {
             Some(ModelProtocol::AnthropicMessages)
@@ -254,11 +256,7 @@ fn parse_protocol(value: &str) -> Option<ModelProtocol> {
     }
 }
 
-fn sourced<T>(
-    value: T,
-    source: MetadataSource,
-    options: &CatalogParseOptions<'_>,
-) -> Sourced<T> {
+fn sourced<T>(value: T, source: MetadataSource, options: &CatalogParseOptions<'_>) -> Sourced<T> {
     let mut value = Sourced::new(value, source).with_origin(options.origin);
     if let Some(revision) = options.revision {
         value = value.with_revision(revision);
@@ -653,11 +651,7 @@ mod tests {
             Some("https://provider.example/v1/models")
         );
         assert_eq!(
-            model
-                .pricing
-                .output_per_million_microunits
-                .unwrap()
-                .value,
+            model.pricing.output_per_million_microunits.unwrap().value,
             8_000_000
         );
     }
@@ -747,9 +741,8 @@ mod tests {
         let cache = ModelCatalogCache::new(dir.path()).with_max_entries(4);
         cache.store(&document(1_000, 3_000)).unwrap();
         fs::write(
-            dir.path().join(
-                "catalog-00000000000000002000-0000000001-00000000000000000000.json",
-            ),
+            dir.path()
+                .join("catalog-00000000000000002000-0000000001-00000000000000000000.json"),
             b"not-json",
         )
         .unwrap();
