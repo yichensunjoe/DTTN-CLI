@@ -1,19 +1,24 @@
 //! Model-provider diagnostics for `dttn doctor model`.
 //!
-//! The default path is offline: it resolves the effective model catalog and
-//! validates the sampler configuration without performing network I/O. `--live`
-//! explicitly enables bounded text-stream and tool-calling probes.
+//! The default path is offline: it resolves the effective model catalog,
+//! validates the sampler configuration, and inspects the credential-free model
+//! metadata sidecar. `--live` explicitly enables bounded text and Tool Calling
+//! probes.
 
 use std::ffi::OsString;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use tokio::sync::mpsc;
+use xai_grok_sampling_types::{MetadataSource, ModelMetadata, ModelProtocol, Sourced};
 use xai_grok_shell::agent::config::{
-    Config as AgentConfig, find_model_by_id, resolve_model_list, resolve_model_to_sampling_config,
+    Config as AgentConfig, resolve_model_list, resolve_model_to_sampling_config,
+};
+use xai_grok_shell::model_catalog_runtime::{
+    CatalogFreshness, default_model_catalog_cache,
 };
 use xai_grok_shell::sampling::{
     ContentPart, ConversationItem, ConversationRequest, ConversationToolChoice, RequestId,
@@ -86,8 +91,89 @@ struct ModelDoctorReport {
     supports_backend_search: bool,
     stream_tool_calls: bool,
     configuration_valid: bool,
+    metadata_evidence: ModelMetadataEvidenceReport,
     warnings: Vec<String>,
     live: Option<LiveReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModelMetadataEvidenceReport {
+    state: &'static str,
+    cache_path: Option<String>,
+    origin: Option<String>,
+    revision: Option<String>,
+    fetched_at_unix_ms: Option<u64>,
+    expires_at_unix_ms: Option<u64>,
+    model_found: bool,
+    protocol: Option<SourcedStringReport>,
+    context_window: Option<SourcedU64Report>,
+    max_input_tokens: Option<SourcedU64Report>,
+    max_output_tokens: Option<SourcedU64Report>,
+    pricing: PricingEvidenceReport,
+    error: Option<String>,
+}
+
+impl ModelMetadataEvidenceReport {
+    fn missing() -> Self {
+        Self {
+            state: "missing",
+            cache_path: None,
+            origin: None,
+            revision: None,
+            fetched_at_unix_ms: None,
+            expires_at_unix_ms: None,
+            model_found: false,
+            protocol: None,
+            context_window: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            pricing: PricingEvidenceReport::default(),
+            error: None,
+        }
+    }
+
+    fn error(error: String) -> Self {
+        Self {
+            state: "error",
+            error: Some(error),
+            ..Self::missing()
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize)]
+struct PricingEvidenceReport {
+    currency: Option<SourcedStringReport>,
+    input_per_million_microunits: Option<SourcedU64Report>,
+    cached_input_per_million_microunits: Option<SourcedU64Report>,
+    output_per_million_microunits: Option<SourcedU64Report>,
+    reasoning_per_million_microunits: Option<SourcedU64Report>,
+}
+
+impl PricingEvidenceReport {
+    fn is_empty(&self) -> bool {
+        self.currency.is_none()
+            && self.input_per_million_microunits.is_none()
+            && self.cached_input_per_million_microunits.is_none()
+            && self.output_per_million_microunits.is_none()
+            && self.reasoning_per_million_microunits.is_none()
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SourcedU64Report {
+    value: u64,
+    source: String,
+    origin: Option<String>,
+    revision: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SourcedStringReport {
+    value: String,
+    source: String,
+    origin: Option<String>,
+    revision: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,7 +203,7 @@ struct ToolCallReport {
 /// the pager's canonical clap parser.
 pub async fn try_run_from_env() -> Result<bool> {
     let args: Vec<OsString> = std::env::args_os().collect();
-    if args.get(1).and_then(|v| v.to_str()) != Some("doctor") {
+    if args.get(1).and_then(|value| value.to_str()) != Some("doctor") {
         return Ok(false);
     }
 
@@ -194,6 +280,28 @@ async fn run_model_doctor(args: ModelDoctorArgs) -> Result<()> {
         );
     }
 
+    let metadata_evidence = load_metadata_evidence(&info.model, &mut warnings);
+    if let Some(evidence_context) = metadata_evidence.context_window.as_ref()
+        && evidence_context.value != info.context_window.get()
+    {
+        warnings.push(format!(
+            "active context_window {} differs from metadata evidence {} ({})",
+            info.context_window.get(),
+            evidence_context.value,
+            evidence_context.source
+        ));
+    }
+    if let (Some(active_output), Some(evidence_output)) = (
+        info.max_completion_tokens.map(u64::from),
+        metadata_evidence.max_output_tokens.as_ref(),
+    ) && active_output != evidence_output.value
+    {
+        warnings.push(format!(
+            "active max_completion_tokens {active_output} differs from metadata evidence {} ({})",
+            evidence_output.value, evidence_output.source
+        ));
+    }
+
     let configuration_error = SamplingClient::new(sampler.clone())
         .err()
         .map(|error| error.to_string());
@@ -266,6 +374,7 @@ async fn run_model_doctor(args: ModelDoctorArgs) -> Result<()> {
         supports_backend_search: info.supports_backend_search,
         stream_tool_calls: info.stream_tool_calls.unwrap_or(false),
         configuration_valid,
+        metadata_evidence,
         warnings,
         live,
     };
@@ -280,6 +389,130 @@ async fn run_model_doctor(args: ModelDoctorArgs) -> Result<()> {
         bail!("model doctor detected an invalid or failed model integration");
     }
     Ok(())
+}
+
+fn load_metadata_evidence(
+    model_id: &str,
+    warnings: &mut Vec<String>,
+) -> ModelMetadataEvidenceReport {
+    let now = match unix_time_ms() {
+        Ok(now) => now,
+        Err(error) => {
+            warnings.push(error.clone());
+            return ModelMetadataEvidenceReport::error(error);
+        }
+    };
+    let cache = default_model_catalog_cache();
+    let cached = match cache.load_latest(None, now) {
+        Ok(Some(cached)) => cached,
+        Ok(None) => return ModelMetadataEvidenceReport::missing(),
+        Err(error) => {
+            let error = format!("failed to load model metadata sidecar: {error}");
+            warnings.push(error.clone());
+            return ModelMetadataEvidenceReport::error(error);
+        }
+    };
+    let state = match cached.freshness {
+        CatalogFreshness::Fresh => "fresh",
+        CatalogFreshness::Stale => {
+            warnings.push("model metadata sidecar is stale".to_string());
+            "stale"
+        }
+    };
+    let model = cached
+        .document
+        .models
+        .iter()
+        .find(|model| model.model_id == model_id);
+
+    ModelMetadataEvidenceReport {
+        state,
+        cache_path: Some(cached.path.display().to_string()),
+        origin: Some(cached.document.origin.clone()),
+        revision: cached.document.revision.clone(),
+        fetched_at_unix_ms: Some(cached.document.fetched_at_unix_ms),
+        expires_at_unix_ms: Some(cached.document.expires_at_unix_ms),
+        model_found: model.is_some(),
+        protocol: model
+            .and_then(|model| model.protocol.as_ref())
+            .map(sourced_protocol_report),
+        context_window: model
+            .and_then(|model| model.context_window.as_ref())
+            .map(sourced_u64_report),
+        max_input_tokens: model
+            .and_then(|model| model.max_input_tokens.as_ref())
+            .map(sourced_u64_report),
+        max_output_tokens: model
+            .and_then(|model| model.max_output_tokens.as_ref())
+            .map(sourced_u64_report),
+        pricing: model.map(pricing_report).unwrap_or_default(),
+        error: None,
+    }
+}
+
+fn pricing_report(model: &ModelMetadata) -> PricingEvidenceReport {
+    PricingEvidenceReport {
+        currency: model.pricing.currency.as_ref().map(sourced_string_report),
+        input_per_million_microunits: model
+            .pricing
+            .input_per_million_microunits
+            .as_ref()
+            .map(sourced_u64_report),
+        cached_input_per_million_microunits: model
+            .pricing
+            .cached_input_per_million_microunits
+            .as_ref()
+            .map(sourced_u64_report),
+        output_per_million_microunits: model
+            .pricing
+            .output_per_million_microunits
+            .as_ref()
+            .map(sourced_u64_report),
+        reasoning_per_million_microunits: model
+            .pricing
+            .reasoning_per_million_microunits
+            .as_ref()
+            .map(sourced_u64_report),
+    }
+}
+
+fn sourced_u64_report(value: &Sourced<u64>) -> SourcedU64Report {
+    SourcedU64Report {
+        value: value.value,
+        source: source_name(value.source),
+        origin: value.origin.clone(),
+        revision: value.revision.clone(),
+    }
+}
+
+fn sourced_string_report(value: &Sourced<String>) -> SourcedStringReport {
+    SourcedStringReport {
+        value: value.value.clone(),
+        source: source_name(value.source),
+        origin: value.origin.clone(),
+        revision: value.revision.clone(),
+    }
+}
+
+fn sourced_protocol_report(value: &Sourced<ModelProtocol>) -> SourcedStringReport {
+    SourcedStringReport {
+        value: format!("{:?}", value.value).to_ascii_lowercase(),
+        source: source_name(value.source),
+        origin: value.origin.clone(),
+        revision: value.revision.clone(),
+    }
+}
+
+fn source_name(source: MetadataSource) -> String {
+    format!("{source:?}").to_ascii_lowercase()
+}
+
+fn unix_time_ms() -> std::result::Result<u64, String> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock is before the Unix epoch".to_string())?
+        .as_millis();
+    u64::try_from(millis).map_err(|_| "current Unix time does not fit in u64".to_string())
 }
 
 #[derive(Clone, Copy)]
@@ -445,6 +678,7 @@ fn render_human(report: &ModelDoctorReport) {
     println!("  context window:       {}", report.context_window);
     println!("  agent type:           {}", report.agent_type);
     println!("  config valid:         {}", report.configuration_valid);
+    render_metadata_evidence(&report.metadata_evidence);
 
     if !report.warnings.is_empty() {
         println!("  warnings:");
@@ -458,6 +692,74 @@ fn render_human(report: &ModelDoctorReport) {
         if let Some(tool_call) = &live.tool_call {
             render_probe("tool calling", tool_call);
         }
+    }
+}
+
+fn render_metadata_evidence(evidence: &ModelMetadataEvidenceReport) {
+    println!("  metadata cache:       {}", evidence.state);
+    if let Some(origin) = &evidence.origin {
+        println!("  metadata origin:      {}", redact_endpoint(origin));
+    }
+    if let Some(revision) = &evidence.revision {
+        println!("  metadata revision:    {revision}");
+    }
+    println!("  metadata model found: {}", evidence.model_found);
+    if let Some(context) = &evidence.context_window {
+        println!(
+            "  evidenced context:    {} ({})",
+            context.value, context.source
+        );
+    }
+    if let Some(output) = &evidence.max_output_tokens {
+        println!(
+            "  evidenced max output: {} ({})",
+            output.value, output.source
+        );
+    }
+    if evidence.pricing.is_empty() {
+        println!("  pricing evidence:     unavailable");
+    } else {
+        let currency = evidence
+            .pricing
+            .currency
+            .as_ref()
+            .map(|currency| currency.value.as_str())
+            .unwrap_or("unknown");
+        println!("  pricing currency:     {currency}");
+        render_price(
+            "input / 1M",
+            evidence.pricing.input_per_million_microunits.as_ref(),
+        );
+        render_price(
+            "cached input / 1M",
+            evidence
+                .pricing
+                .cached_input_per_million_microunits
+                .as_ref(),
+        );
+        render_price(
+            "output / 1M",
+            evidence.pricing.output_per_million_microunits.as_ref(),
+        );
+        render_price(
+            "reasoning / 1M",
+            evidence
+                .pricing
+                .reasoning_per_million_microunits
+                .as_ref(),
+        );
+    }
+    if let Some(error) = &evidence.error {
+        println!("  metadata error:       {error}");
+    }
+}
+
+fn render_price(label: &str, price: Option<&SourcedU64Report>) {
+    if let Some(price) = price {
+        println!(
+            "    {label:<20} {} micro-units ({})",
+            price.value, price.source
+        );
     }
 }
 
