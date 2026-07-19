@@ -20,6 +20,11 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
       - name: Extract implementation script
         shell: bash
         run: |
@@ -49,6 +54,9 @@ jobs:
 
       - name: Run implementation and validation
         shell: bash
+        env:
+          FEATURE_BRANCH: refactor/dttn-session-model-snapshot-phase-5
+          EXPECTED_HEAD: 67c4964dac9732613f362fc639177ed3bea9ac7b
         run: |
           set +e
           bash /tmp/implement-session-model-snapshot.sh > /tmp/implementation.log 2>&1
