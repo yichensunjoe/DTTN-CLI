@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use serde::Serialize;
 use url::Url;
 use xai_grok_sampling_types::{ApiBackend, ModelProtocol};
@@ -122,7 +122,21 @@ pub async fn try_run_from_env() -> Result<bool> {
         return legacy::try_run_from_env().await;
     }
 
-    let parsed = RefreshCli::try_parse_from(args).map_err(|error| anyhow!(error.to_string()))?;
+    let parsed = match RefreshCli::try_parse_from(args) {
+        Ok(parsed) => parsed,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            error
+                .print()
+                .context("failed to print doctor model-refresh help")?;
+            return Ok(true);
+        }
+        Err(error) => return Err(anyhow!(error.to_string())),
+    };
     match parsed.command {
         RefreshRootCommand::Doctor(args) => match args.command {
             RefreshDoctorCommand::ModelRefresh(args) => run_model_refresh(args).await?,
@@ -277,7 +291,6 @@ fn render_refresh_report(report: &ModelRefreshReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::error::ErrorKind;
 
     fn parse_refresh_args<const N: usize>(args: [&str; N]) -> ModelRefreshArgs {
         let parsed = RefreshCli::try_parse_from(args).expect("refresh CLI should parse");
