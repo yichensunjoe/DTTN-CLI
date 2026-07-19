@@ -46,6 +46,7 @@ jobs:
             cargo test -p xai-grok-shell \
               --test model_catalog_contract \
               --test model_catalog_doctor_refresh
+            cargo test -p xai-grok-pager --lib model_doctor::tests
             git diff --check "origin/${{ github.base_ref }}...HEAD"
           } 2>&1 | tee phase4-validation.log
 
