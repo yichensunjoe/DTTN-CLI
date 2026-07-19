@@ -2,7 +2,7 @@
 //!
 //! Catalog credentials are sent only to the configured endpoint. Redirects are
 //! disabled, response bodies are size-limited, and errors never include response
-//! bodies or credential values.
+//! bodies, URL query parameters, or credential values.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -55,7 +55,7 @@ impl fmt::Debug for CatalogCredential {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CatalogFetchRequest {
     pub endpoint: Url,
     pub kind: CatalogEndpointKind,
@@ -65,6 +65,22 @@ pub struct CatalogFetchRequest {
     pub cache_ttl: Duration,
     /// Allows plain HTTP only for localhost or an IP loopback address.
     pub allow_insecure_localhost: bool,
+}
+
+impl fmt::Debug for CatalogFetchRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let endpoint = catalog_origin(&self.endpoint).unwrap_or_else(|_| "<invalid-url>".to_string());
+        formatter
+            .debug_struct("CatalogFetchRequest")
+            .field("endpoint", &endpoint)
+            .field("kind", &self.kind)
+            .field("credential", &self.credential)
+            .field("default_protocol", &self.default_protocol)
+            .field("timeout", &self.timeout)
+            .field("cache_ttl", &self.cache_ttl)
+            .field("allow_insecure_localhost", &self.allow_insecure_localhost)
+            .finish()
+    }
 }
 
 impl CatalogFetchRequest {
@@ -108,7 +124,7 @@ pub enum CatalogFetchError {
     #[error("catalog HTTP client could not be built: {0}")]
     ClientBuild(reqwest::Error),
     #[error("catalog request failed: {0}")]
-    Network(reqwest::Error),
+    Network(String),
     #[error("catalog endpoint returned HTTP {0}")]
     HttpStatus(u16),
     #[error("catalog response exceeded {MAX_RESPONSE_BYTES} bytes")]
@@ -145,7 +161,7 @@ pub async fn fetch_and_cache_model_catalog(
         builder = builder.header(AUTHORIZATION, credential.authorization_value()?);
     }
 
-    let mut response = builder.send().await.map_err(CatalogFetchError::Network)?;
+    let mut response = builder.send().await.map_err(network_error)?;
     if !response.status().is_success() {
         return Err(CatalogFetchError::HttpStatus(response.status().as_u16()));
     }
@@ -162,7 +178,7 @@ pub async fn fetch_and_cache_model_catalog(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(CatalogFetchError::Network)? {
+    while let Some(chunk) = response.chunk().await.map_err(network_error)? {
         if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
             return Err(CatalogFetchError::ResponseTooLarge);
         }
@@ -258,6 +274,10 @@ fn catalog_origin(endpoint: &Url) -> Result<String, CatalogFetchError> {
     Ok(origin.to_string())
 }
 
+fn network_error(error: reqwest::Error) -> CatalogFetchError {
+    CatalogFetchError::Network(error.without_url().to_string())
+}
+
 fn unix_time_ms() -> Result<u64, CatalogFetchError> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -275,11 +295,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn credential_debug_is_redacted() {
+    fn credential_and_request_debug_are_redacted() {
         let credential = CatalogCredential::bearer("top-secret").unwrap();
         let rendered = format!("{credential:?}");
         assert!(!rendered.contains("top-secret"));
         assert!(rendered.contains("REDACTED"));
+
+        let mut request = CatalogFetchRequest::new(
+            Url::parse("https://provider.example/v1/models?api_key=query-secret").unwrap(),
+            CatalogEndpointKind::OpenAiCompatible,
+            ModelProtocol::ChatCompletions,
+        );
+        request.credential = Some(credential);
+        let rendered = format!("{request:?}");
+        assert!(!rendered.contains("top-secret"));
+        assert!(!rendered.contains("query-secret"));
     }
 
     #[test]
@@ -325,6 +355,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_error_does_not_expose_query_parameters() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = ModelCatalogCache::new(dir.path());
+        let mut request = CatalogFetchRequest::new(
+            Url::parse("http://127.0.0.1:0/v1/models?api_key=query-secret").unwrap(),
+            CatalogEndpointKind::OpenAiCompatible,
+            ModelProtocol::ChatCompletions,
+        );
+        request.allow_insecure_localhost = true;
+        request.timeout = Duration::from_millis(100);
+        let error = fetch_and_cache_model_catalog(&request, &cache)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("query-secret"));
+        assert!(!error.contains("api_key"));
+    }
+
+    #[tokio::test]
     async fn fetches_explicit_metadata_and_writes_cache_without_secret() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -332,8 +381,8 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0u8; 4096];
             let read = stream.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..read]);
-            assert!(request.contains("Authorization: Bearer top-secret"));
+            let request = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
+            assert!(request.contains("authorization: bearer top-secret"));
             let body = r#"{"data":[{"id":"example","context_window":128000}]}"#;
             write!(
                 stream,
