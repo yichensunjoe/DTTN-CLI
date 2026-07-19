@@ -30,7 +30,6 @@ jobs:
           marker = '        run: |\n'
           if marker not in source:
               raise SystemExit('implementation workflow has no run block')
-          # The implementation is the final run block; the earlier block only installs protoc.
           block = source.rsplit(marker, 1)[1]
           lines = []
           for line in block.splitlines():
@@ -45,4 +44,13 @@ jobs:
 
       - name: Run implementation and validation
         shell: bash
-        run: bash /tmp/implement-session-model-snapshot.sh
+        run: |
+          set +e
+          bash /tmp/implement-session-model-snapshot.sh > /tmp/implementation.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 5 implementation failed with status $status"
+            tail -n 200 /tmp/implementation.log
+            exit "$status"
+          fi
+          tail -n 60 /tmp/implementation.log
