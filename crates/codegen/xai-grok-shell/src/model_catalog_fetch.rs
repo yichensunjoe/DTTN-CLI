@@ -181,8 +181,8 @@ pub async fn fetch_and_cache_model_catalog(
     }
 
     let fetched_at_unix_ms = unix_time_ms()?;
-    let ttl_ms = u64::try_from(request.cache_ttl.as_millis())
-        .map_err(|_| CatalogFetchError::InvalidTtl)?;
+    let ttl_ms =
+        u64::try_from(request.cache_ttl.as_millis()).map_err(|_| CatalogFetchError::InvalidTtl)?;
     let expires_at_unix_ms = fetched_at_unix_ms
         .checked_add(ttl_ms)
         .ok_or(CatalogFetchError::InvalidTtl)?;
@@ -212,9 +212,7 @@ fn parse_payload(
     options: &CatalogParseOptions<'_>,
 ) -> Result<Vec<ModelMetadata>, CatalogFetchError> {
     let result = match kind {
-        CatalogEndpointKind::OpenAiCompatible => {
-            parse_openai_compatible_catalog(payload, options)
-        }
+        CatalogEndpointKind::OpenAiCompatible => parse_openai_compatible_catalog(payload, options),
         CatalogEndpointKind::DttnRegistry => parse_dttn_registry_catalog(payload, options),
     };
     result.map_err(|error| CatalogFetchError::InvalidCatalog(error.to_string()))
