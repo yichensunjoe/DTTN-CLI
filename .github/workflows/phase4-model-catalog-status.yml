@@ -43,7 +43,7 @@ jobs:
               rustfmt --edition 2024 --check "${changed_rust[@]}"
             fi
             cargo test -p xai-grok-sampling-types
-            cargo test -p xai-grok-shell model_catalog_ --lib
+            cargo test -p xai-grok-shell --test model_catalog_contract
             git diff --check "origin/${{ github.base_ref }}...HEAD"
           } 2>&1 | tee phase4-validation.log
 
