@@ -22,6 +22,7 @@ pub mod mcp_cmd;
 pub mod memory_cmd;
 pub mod memory_release;
 pub mod memory_trace;
+#[path = "model_doctor_dispatch.rs"]
 pub mod model_doctor;
 // ── Minimal (scrollback-native) mode seam ────────────────────────────────────
 // The *only* minimal-specific surface in this (the "full pager") crate. Both
