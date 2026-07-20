@@ -3,7 +3,6 @@
 //! Writers publish complete immutable snapshots after runtime events. Readers only
 //! clone an `Arc` and never perform network, filesystem, Git, or async work.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use super::session_model_snapshot::ResolvedSessionModelSnapshot;
@@ -141,7 +140,6 @@ impl StatusRuntimeSnapshot {
 
 #[derive(Debug)]
 struct StatusRuntimeInner {
-    revision: AtomicU64,
     current: RwLock<Arc<StatusRuntimeSnapshot>>,
 }
 
@@ -153,10 +151,8 @@ pub struct StatusRuntimePublisher {
 
 impl StatusRuntimePublisher {
     pub fn new(initial: StatusRuntimeSnapshot) -> Self {
-        let revision = initial.revision;
         Self {
             inner: Arc::new(StatusRuntimeInner {
-                revision: AtomicU64::new(revision),
                 current: RwLock::new(Arc::new(initial)),
             }),
         }
@@ -172,24 +168,24 @@ impl StatusRuntimePublisher {
     }
 
     /// Publish a complete new immutable generation.
+    ///
+    /// The write lock covers the complete read-modify-publish transaction. This
+    /// prevents concurrent runtime event publishers from cloning the same stale
+    /// generation and silently overwriting each other's fields.
     pub fn update(
         &self,
         mutate: impl FnOnce(&mut StatusRuntimeSnapshot),
     ) -> Arc<StatusRuntimeSnapshot> {
-        let current = self.snapshot();
-        let mut next = (*current).clone();
-        mutate(&mut next);
-        next.revision = self
-            .inner
-            .revision
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        let next = Arc::new(next);
-        *self
+        let mut current = self
             .inner
             .current
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = next.clone();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut next = (**current).clone();
+        mutate(&mut next);
+        next.revision = next.revision.saturating_add(1);
+        let next = Arc::new(next);
+        *current = next.clone();
         next
     }
 }
@@ -212,6 +208,36 @@ mod tests {
         assert_eq!(read.run_state, StatusRunState::Running);
         assert_eq!(read.tokens.session_input, 42);
         assert_eq!(read.tools.active_count, 1);
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_lose_runtime_updates() {
+        const WRITERS: usize = 8;
+        const UPDATES_PER_WRITER: usize = 250;
+
+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+        let threads = (0..WRITERS)
+            .map(|_| {
+                let publisher = publisher.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..UPDATES_PER_WRITER {
+                        publisher.update(|snapshot| {
+                            snapshot.tokens.session_input =
+                                snapshot.tokens.session_input.saturating_add(1);
+                        });
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for thread in threads {
+            thread.join().expect("status publisher writer panicked");
+        }
+
+        let snapshot = publisher.snapshot();
+        let expected = (WRITERS * UPDATES_PER_WRITER) as u64;
+        assert_eq!(snapshot.tokens.session_input, expected);
+        assert_eq!(snapshot.revision, expected);
     }
 
     #[test]
