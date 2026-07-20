@@ -122,11 +122,7 @@ pub const MODEL_PROVIDERS: &[ModelProviderDescriptor] = &[
         id: "qwen",
         name: "Qwen Cloud",
         description: "Alibaba Qwen cloud models",
-        auth_env: &[
-            "QWEN_API_KEY",
-            "MODELSTUDIO_API_KEY",
-            "DASHSCOPE_API_KEY",
-        ],
+        auth_env: &["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
         default_base_url: None,
         api_style: "openai-compatible",
         local: false,
@@ -202,10 +198,7 @@ mod tests {
                 "custom",
             ]
         );
-        assert_eq!(
-            ids.iter().copied().collect::<HashSet<_>>().len(),
-            ids.len()
-        );
+        assert_eq!(ids.iter().copied().collect::<HashSet<_>>().len(), ids.len());
         assert_eq!(MODEL_PROVIDERS.last().unwrap().name, "Custom providers");
     }
 }
