@@ -46,7 +46,9 @@ pub struct CustomModelWriteResult {
 
 #[derive(Debug, Error)]
 pub enum UserConfigError {
-    #[error("invalid model id: model must not be empty or contain whitespace or control characters")]
+    #[error(
+        "invalid model id: model must not be empty or contain whitespace or control characters"
+    )]
     InvalidModelId,
     #[error("invalid provider id: use lowercase letters, numbers, '.', '_' or '-'")]
     InvalidProviderId,
@@ -75,10 +77,7 @@ pub enum UserConfigError {
     #[error("[model] in {path} is not a TOML table")]
     ModelCatalogNotTable { path: PathBuf },
     #[error("model entry {model_ref} in {path} is not a TOML table")]
-    ModelEntryNotTable {
-        path: PathBuf,
-        model_ref: String,
-    },
+    ModelEntryNotTable { path: PathBuf, model_ref: String },
     #[error("failed to write DTTN config at {path}: {source}")]
     Write {
         path: PathBuf,
@@ -140,9 +139,9 @@ fn validate_provider_id(provider: &str) -> Result<&str, UserConfigError> {
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
         return Err(UserConfigError::InvalidProviderId);
     }
-    if !chars.all(|ch| {
-        ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-')
-    }) {
+    if !chars
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-'))
+    {
         return Err(UserConfigError::InvalidProviderId);
     }
     Ok(provider)
@@ -235,10 +234,7 @@ fn set_default_model_in_document(
     if document.get("models").is_none() {
         document["models"] = Item::Table(Table::new());
     }
-    let Some(models) = document
-        .get_mut("models")
-        .and_then(Item::as_table_like_mut)
-    else {
+    let Some(models) = document.get_mut("models").and_then(Item::as_table_like_mut) else {
         return Err(UserConfigError::ModelsNotTable {
             path: path.to_path_buf(),
         });
@@ -247,10 +243,7 @@ fn set_default_model_in_document(
     Ok(())
 }
 
-fn set_custom_model_at(
-    path: &Path,
-    config: &CustomModelConfig,
-) -> Result<String, UserConfigError> {
+fn set_custom_model_at(path: &Path, config: &CustomModelConfig) -> Result<String, UserConfigError> {
     let provider_id = validate_provider_id(&config.provider_id)?;
     let model_id = validate_model_id(&config.model_id)?;
     let base_url = normalize_base_url(&config.base_url)?;
@@ -267,10 +260,7 @@ fn set_custom_model_at(
     if document.get("model").is_none() {
         document["model"] = Item::Table(Table::new());
     }
-    let Some(catalog) = document
-        .get_mut("model")
-        .and_then(Item::as_table_like_mut)
-    else {
+    let Some(catalog) = document.get_mut("model").and_then(Item::as_table_like_mut) else {
         return Err(UserConfigError::ModelCatalogNotTable {
             path: path.to_path_buf(),
         });
@@ -291,10 +281,7 @@ fn set_custom_model_at(
     entry.insert("model", value(model_id));
     entry.insert("base_url", value(base_url));
     entry.insert("env_key", value(api_key_env));
-    entry.insert(
-        "api_backend",
-        value(config.api_backend.as_config_value()),
-    );
+    entry.insert("api_backend", value(config.api_backend.as_config_value()));
     entry.insert("provider_extensions", value("standard"));
     entry.insert("context_window", value(config.context_window as i64));
     entry.insert("agent_type", value("dttn-code-agent"));
@@ -378,11 +365,7 @@ mod tests {
     fn custom_model_uses_existing_runtime_schema_and_does_not_switch_implicitly() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
-        std::fs::write(
-            &path,
-            "# retained\n[models]\ndefault = \"old/model\"\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "# retained\n[models]\ndefault = \"old/model\"\n").unwrap();
         let config = CustomModelConfig {
             provider_id: "acme".to_owned(),
             model_id: "code-v1".to_owned(),
@@ -394,10 +377,7 @@ mod tests {
             max_completion_tokens: Some(8192),
             set_default: false,
         };
-        assert_eq!(
-            set_custom_model_at(&path, &config).unwrap(),
-            "acme/code-v1"
-        );
+        assert_eq!(set_custom_model_at(&path, &config).unwrap(), "acme/code-v1");
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("# retained"));
         assert!(raw.contains("default = \"old/model\""));
