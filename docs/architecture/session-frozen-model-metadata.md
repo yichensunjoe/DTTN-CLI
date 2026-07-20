@@ -7,8 +7,11 @@ window, maximum output, and the current catalog capability/pricing evidence.
 Snapshots are append-only JSON files under the session directory. Writes use a
 temporary file followed by a same-directory rename, so readers on macOS and
 Windows either observe a complete snapshot or fall back to the previous valid
-generation. API keys, request headers, cookies, bearer tokens and full provider
-URLs are never persisted.
+generation. API keys, request headers, cookies, bearer tokens, configured
+inference endpoints, URL credentials, query parameters, and fragments are never
+persisted. A sanitized catalog-origin URL may be retained as provenance; it is
+produced by the bounded catalog fetch layer after credentials, query parameters,
+and fragments have been rejected or removed.
 
 On resume, the newest valid snapshot is restored before Chat State, the sampler
 actor and compaction policy are initialized. Provider metadata refreshes may
