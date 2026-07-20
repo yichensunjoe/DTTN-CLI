@@ -23,7 +23,7 @@ pub enum ConfigCommand {
         #[arg(long)]
         json: bool,
     },
-    /// List model providers or register a custom OpenAI-compatible model
+    /// List model providers or register a custom model
     Models(ModelsArgs),
     /// Print the user configuration file path
     Path {
@@ -44,7 +44,7 @@ pub struct ModelsArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 enum ModelsCommand {
-    /// Register a custom OpenAI-compatible provider model
+    /// Register a custom provider model using a DTTN-supported API backend
     Custom(CustomModelArgs),
 }
 
@@ -54,6 +54,8 @@ enum CustomBackend {
     ChatCompletions,
     /// OpenAI Responses-compatible endpoint
     Responses,
+    /// Anthropic Messages-compatible endpoint
+    Messages,
 }
 
 impl From<CustomBackend> for xai_grok_config::user_config::CustomModelApiBackend {
@@ -61,6 +63,7 @@ impl From<CustomBackend> for xai_grok_config::user_config::CustomModelApiBackend
         match value {
             CustomBackend::ChatCompletions => Self::ChatCompletions,
             CustomBackend::Responses => Self::Responses,
+            CustomBackend::Messages => Self::Messages,
         }
     }
 }
@@ -137,7 +140,7 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
                 "modelRefFormat": "provider/model",
                 "customProvider": {
                     "command": "dttn config models custom <PROVIDER> <MODEL> --base-url <URL> --api-key-env <ENV_VAR> --context-window <TOKENS>",
-                    "supportedBackends": ["chat_completions", "responses"],
+                    "supportedBackends": ["chat_completions", "responses", "messages"],
                     "changesDefaultOnlyWith": "--set-default",
                 },
             }))?
@@ -158,7 +161,7 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
     }
     println!();
     println!("Model references use `provider/model`.");
-    println!("Register a custom OpenAI-compatible model:");
+    println!("Register a custom model using a DTTN-supported API backend:");
     println!(
         "  dttn config models custom <PROVIDER> <MODEL> --base-url <URL> --api-key-env <ENV_VAR> --context-window <TOKENS>"
     );
@@ -166,7 +169,7 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
         "Add `--set-default` only when the new model should become the default for new sessions."
     );
     println!(
-        "Provider-native Gemini and Ollama protocols are listed for discovery but are not configured by the custom OpenAI-compatible command."
+        "Provider-native Gemini and Ollama protocols are listed for discovery but are not configured by the custom command."
     );
     Ok(())
 }
