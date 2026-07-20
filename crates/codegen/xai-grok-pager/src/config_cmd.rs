@@ -68,6 +68,23 @@ impl From<CustomBackend> for xai_grok_config::user_config::CustomModelApiBackend
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CustomAuthScheme {
+    /// Authorization: Bearer <API_KEY>
+    Bearer,
+    /// x-api-key: <API_KEY>
+    XApiKey,
+}
+
+impl From<CustomAuthScheme> for xai_grok_config::user_config::CustomModelAuthScheme {
+    fn from(value: CustomAuthScheme) -> Self {
+        match value {
+            CustomAuthScheme::Bearer => Self::Bearer,
+            CustomAuthScheme::XApiKey => Self::XApiKey,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 struct CustomModelArgs {
     /// Stable lowercase provider ID used in the provider/model reference
@@ -88,6 +105,9 @@ struct CustomModelArgs {
     /// Compatible request protocol
     #[arg(long, value_enum, default_value = "chat-completions")]
     backend: CustomBackend,
+    /// Authentication header scheme; defaults to x-api-key for Messages and bearer otherwise
+    #[arg(long, value_enum)]
+    auth_scheme: Option<CustomAuthScheme>,
     /// Total model context window in tokens
     #[arg(long, value_name = "TOKENS")]
     context_window: u64,
@@ -141,6 +161,7 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
                 "customProvider": {
                     "command": "dttn config models custom <PROVIDER> <MODEL> --base-url <URL> --api-key-env <ENV_VAR> --context-window <TOKENS>",
                     "supportedBackends": ["chat_completions", "responses", "messages"],
+                    "supportedAuthSchemes": ["bearer", "x_api_key"],
                     "changesDefaultOnlyWith": "--set-default",
                 },
             }))?
@@ -175,6 +196,13 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
 }
 
 fn run_custom_model(args: CustomModelArgs, json: bool) -> anyhow::Result<()> {
+    let auth_scheme = args.auth_scheme.map(Into::into).unwrap_or_else(|| {
+        if matches!(args.backend, CustomBackend::Messages) {
+            xai_grok_config::user_config::CustomModelAuthScheme::XApiKey
+        } else {
+            xai_grok_config::user_config::CustomModelAuthScheme::Bearer
+        }
+    });
     let config = xai_grok_config::user_config::CustomModelConfig {
         provider_id: args.provider,
         model_id: args.model,
@@ -182,6 +210,7 @@ fn run_custom_model(args: CustomModelArgs, json: bool) -> anyhow::Result<()> {
         base_url: args.base_url,
         api_key_env: args.api_key_env,
         api_backend: args.backend.into(),
+        auth_scheme,
         context_window: args.context_window,
         max_completion_tokens: args.max_completion_tokens,
         set_default: args.set_default,
