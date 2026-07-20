@@ -18,6 +18,7 @@ mod fs_atomic;
 mod loader;
 mod macos_managed;
 mod managed_cache;
+pub mod model_providers;
 mod paths;
 pub mod shell;
 pub mod signed_policy;
