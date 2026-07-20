@@ -13,6 +13,7 @@ use toml_edit::{DocumentMut, Item, Table, value};
 pub enum CustomModelApiBackend {
     ChatCompletions,
     Responses,
+    Messages,
 }
 
 impl CustomModelApiBackend {
@@ -20,6 +21,7 @@ impl CustomModelApiBackend {
         match self {
             Self::ChatCompletions => "chat_completions",
             Self::Responses => "responses",
+            Self::Messages => "messages",
         }
     }
 }
