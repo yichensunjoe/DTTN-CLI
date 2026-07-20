@@ -48,6 +48,36 @@ fn concurrent_event_publishers_preserve_every_update() {
 }
 
 #[test]
+fn stale_turn_events_cannot_overwrite_the_active_turn() {
+    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+    publisher.begin_turn("turn-a");
+    publisher.begin_turn("turn-b");
+
+    let active_revision = publisher.snapshot().revision;
+    assert!(publisher.mark_cancelling("turn-a").is_none());
+    assert!(
+        publisher
+            .finish_turn("turn-a", StatusRunState::Failed)
+            .is_none()
+    );
+
+    let active = publisher.snapshot();
+    assert_eq!(active.revision, active_revision);
+    assert_eq!(active.active_prompt_id.as_deref(), Some("turn-b"));
+    assert_eq!(active.run_state, StatusRunState::Running);
+
+    assert!(publisher.mark_cancelling("turn-b").is_some());
+    assert!(
+        publisher
+            .finish_turn("turn-b", StatusRunState::Idle)
+            .is_some()
+    );
+    let idle = publisher.snapshot();
+    assert_eq!(idle.active_prompt_id, None);
+    assert_eq!(idle.run_state, StatusRunState::Idle);
+}
+
+#[test]
 fn context_utilization_is_saturating_and_unknown_safe() {
     let usage = StatusTokenUsage {
         session_input: 90,
