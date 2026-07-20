@@ -1,0 +1,76 @@
+name: DTTN Config CLI Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dttn-config-cli-validation.yml'
+      - 'Cargo.lock'
+      - 'crates/codegen/xai-grok-config/**'
+      - 'crates/codegen/xai-grok-pager/src/app/cli.rs'
+      - 'crates/codegen/xai-grok-pager/src/config_cmd.rs'
+      - 'crates/codegen/xai-grok-pager/src/lib.rs'
+      - 'crates/codegen/xai-grok-pager-bin/src/main.rs'
+      - 'crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs'
+
+concurrency:
+  group: dttn-config-cli-${{ github.event.pull_request.number }}-${{ github.job }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  config-layer:
+    name: Config layer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Test user configuration writer
+        run: cargo test -p xai-grok-config user_config::tests
+
+  cli-contract:
+    name: Offline CLI contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Validate changed Rust formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          mapfile -t changed_rust < <(
+            git diff --name-only --diff-filter=ACM \
+              "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
+          )
+          if (( ${#changed_rust[@]} > 0 )); then
+            rustfmt --edition 2024 --check "${changed_rust[@]}"
+          fi
+
+      - name: Test real dttn config subprocesses
+        run: cargo test -p xai-grok-pager-bin --test config_cli_contract
+
+      - name: Check production dttn binary
+        run: cargo check -p xai-grok-pager-bin --bin dttn
+
+      - name: Validate patch whitespace
+        shell: bash
+        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
