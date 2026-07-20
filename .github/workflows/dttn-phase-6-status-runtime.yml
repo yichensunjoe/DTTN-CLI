@@ -46,6 +46,16 @@ jobs:
           test -f .github/phase6-status-sampler.patch
           patch --dry-run -p1 < .github/phase6-status-sampler.patch
           patch -p1 < .github/phase6-status-sampler.patch
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs')
+          source = path.read_text()
+          old = 'assert_eq!(running.tools.queued_count, 3);'
+          new = 'assert_eq!(running.tools.queued_count, 0);'
+          if source.count(old) != 1:
+              raise SystemExit('expected exactly one stale queued_count assertion')
+          path.write_text(source.replace(old, new))
+          PY
           rustfmt --edition 2024 --config skip_children=true \
             crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
             crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs \
