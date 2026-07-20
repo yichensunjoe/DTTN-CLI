@@ -103,6 +103,10 @@ fn config_models_lists_only_the_curated_provider_directory() {
     );
     assert_eq!(payload["modelRefFormat"], "provider/model");
     assert_eq!(
+        payload["customProvider"]["supportedAuthSchemes"],
+        serde_json::json!(["bearer", "x_api_key"])
+    );
+    assert_eq!(
         payload["customProvider"]["changesDefaultOnlyWith"],
         "--set-default"
     );
@@ -154,6 +158,7 @@ fn custom_provider_model_is_persisted_without_plaintext_credentials() {
     assert!(config.contains("base_url = \"https://models.acme.test/v1\""));
     assert!(config.contains("env_key = \"ACME_API_KEY\""));
     assert!(config.contains("api_backend = \"messages\""));
+    assert!(config.contains("auth_scheme = \"x_api_key\""));
     assert!(config.contains("context_window = 131072"));
     assert!(config.contains("max_completion_tokens = 8192"));
     assert!(!config.contains("sk-"));
