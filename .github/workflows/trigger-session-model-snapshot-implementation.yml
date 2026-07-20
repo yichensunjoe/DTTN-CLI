@@ -58,16 +58,21 @@ jobs:
 
           path = Path('/tmp/implement-session-model-snapshot.sh')
           script = path.read_text()
-          replacements = {
-              'cargo test -p xai-grok-shell --test session_model_snapshot_contract':
+          replacements = (
+              (
+                  'cargo test -p xai-grok-shell --test session_model_snapshot_contract',
                   'echo "Reusing the previously successful Phase 5 contract-test result"',
-              'cargo check -p xai-grok-pager-bin --bin dttn':
+              ),
+              (
+                  'cargo check -p xai-grok-pager-bin --bin dttn',
                   'echo "Reusing the previously successful dttn production-binary check"',
-          }
-          for old, new in replacements.items():
-              if script.count(old) != 1:
-                  raise SystemExit(f'expected exactly one final validation command: {old}')
-              script = script.replace(old, new, 1)
+              ),
+          )
+          for old, new in replacements:
+              at = script.rfind(old)
+              if at < 0:
+                  raise SystemExit(f'final validation command not found: {old}')
+              script = script[:at] + new + script[at + len(old):]
           path.write_text(script)
           PY
 
