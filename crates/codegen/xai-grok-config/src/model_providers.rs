@@ -51,8 +51,8 @@ pub const MODEL_PROVIDERS: &[ModelProviderDescriptor] = &[
         name: "MiniMax",
         description: "MiniMax API models",
         auth_env: &["MINIMAX_API_KEY"],
-        default_base_url: None,
-        api_style: "openai-compatible",
+        default_base_url: Some("https://api.minimax.io/anthropic"),
+        api_style: "anthropic-messages",
         local: false,
     },
     ModelProviderDescriptor {
@@ -157,7 +157,7 @@ pub const MODEL_PROVIDERS: &[ModelProviderDescriptor] = &[
     ModelProviderDescriptor {
         id: "custom",
         name: "Custom providers",
-        description: "User-defined OpenAI-compatible providers and models",
+        description: "User-defined providers using DTTN-supported API backends",
         auth_env: &[],
         default_base_url: None,
         api_style: "user-defined",
