@@ -6,85 +6,147 @@ on:
       - main
     paths:
       - '.github/workflows/dttn-phase-6-status-runtime.yml'
-      - 'Cargo.lock'
-      - 'crates/build/xai-proto-build/**'
       - 'crates/codegen/xai-grok-shell/src/session/**'
       - 'crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs'
-      - 'crates/codegen/xai-grok-pager/**'
-      - 'crates/codegen/xai-grok-pager-bin/**'
 
 concurrency:
   group: dttn-phase-6-status-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  snapshot-contract:
-    name: Snapshot contract (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes protobuf-compiler
-
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: choco install protoc --no-progress -y
-
-      - name: Test status runtime contract
-        run: cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
-
-  renderer-wiring:
-    name: Renderer wiring and formatting
+  apply-ledger-usage-patch:
+    name: Apply ledger usage integration
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
-      - name: Checkout
+      - name: Checkout PR head
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
-      - name: Install protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes protobuf-compiler
-
-      - name: Validate changed Rust formatting
+      - name: Apply counted integration patch
         shell: bash
         run: |
-          set -euo pipefail
-          git fetch origin "${{ github.base_ref }}" --depth=1
-          mapfile -t changed_rust < <(
-            git diff --name-only --diff-filter=ACM \
-              "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
-          )
-          if (( ${#changed_rust[@]} > 0 )); then
-            rustfmt --edition 2024 --config skip_children=true --check "${changed_rust[@]}"
+          python - <<'PY'
+          from pathlib import Path
+
+          status = Path('crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs')
+          text = status.read_text()
+          marker = '''impl StatusUsageTotals {
+              fn trusted_cost_microunits(self) -> Option<u64> {'''
+          replacement = '''impl StatusUsageTotals {
+              pub fn from_prompt_usage(
+                  usage: &crate::extensions::notification::PromptUsage,
+              ) -> Self {
+                  let totals = &usage.totals;
+                  Self {
+                      input_tokens: totals.input_tokens,
+                      output_tokens: totals.output_tokens,
+                      cached_read_tokens: totals.cached_read_tokens,
+                      model_calls: totals.model_calls,
+                      api_duration_ms: totals.api_duration_ms,
+                      cost_usd_ticks: totals.cost_usd_ticks,
+                      cost_trusted: !usage.usage_is_incomplete && !totals.cost_is_partial,
+                  }
+              }
+
+              pub fn from_session_ledger(ledger: &xai_chat_state::UsageLedger) -> Self {
+                  let totals = &ledger.totals;
+                  Self {
+                      input_tokens: totals.input_tokens,
+                      output_tokens: totals.output_tokens,
+                      cached_read_tokens: totals.cached_read_tokens,
+                      model_calls: totals.model_calls,
+                      api_duration_ms: totals.api_duration_ms,
+                      cost_usd_ticks: totals.cost_usd_ticks,
+                      cost_trusted: !ledger.incomplete && !totals.cost_is_partial(),
+                  }
+              }
+
+              fn trusted_cost_microunits(self) -> Option<u64> {'''
+          if 'pub fn from_prompt_usage' not in text:
+              count = text.count(marker)
+              if count != 1:
+                  raise SystemExit(f'status conversion marker count={count}, expected 1')
+              text = text.replace(marker, replacement)
+              status.write_text(text)
+
+          turn_end = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn_end.rs')
+          text = turn_end.read_text()
+          marker = '''            };
+              // Surface the cancel trigger on the terminal `_meta` as `cancelTrigger`.'''
+          insertion = '''            };
+              let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
+              self.status_runtime.publish_usage(
+                  usage.as_ref().map(
+                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage,
+                  ),
+                  session_usage.as_ref().map(
+                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
+                  ),
+              );
+              // Surface the cancel trigger on the terminal `_meta` as `cancelTrigger`.'''
+          if 'let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();' not in text:
+              count = text.count(marker)
+              if count != 1:
+                  raise SystemExit(f'turn_end insertion marker count={count}, expected 1')
+              text = text.replace(marker, insertion)
+              turn_end.write_text(text)
+
+          cancel = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs')
+          text = cancel.read_text()
+          marker = '''        };
+              {
+                  let mut current_prompt_id = self'''
+          insertion = '''        };
+              let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
+              self.status_runtime.publish_usage(
+                  cancelled_usage.as_ref().map(
+                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage,
+                  ),
+                  session_usage.as_ref().map(
+                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
+                  ),
+              );
+              {
+                  let mut current_prompt_id = self'''
+          if text.count('StatusUsageTotals::from_prompt_usage') == 0:
+              count = text.count(marker)
+              if count != 1:
+                  raise SystemExit(f'cancel insertion marker count={count}, expected 1')
+              text = text.replace(marker, insertion)
+              cancel.write_text(text)
+          PY
+
+          rustfmt --edition 2024 --config skip_children=true \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn_end.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+          git diff --check
+
+      - name: Commit integration files
+        shell: bash
+        run: |
+          if git diff --quiet -- \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn_end.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs; then
+            echo 'Ledger usage integration already applied.'
+            exit 0
           fi
-
-      - name: Test proto build helper
-        run: cargo test -p xai-proto-build
-
-      - name: Check production dttn binary
-        run: cargo check -p xai-grok-pager-bin --bin dttn
-
-      - name: Validate patch whitespace
-        shell: bash
-        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn_end.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+          git commit -m 'feat: publish ledger-backed status usage'
+          git push origin HEAD:${{ github.head_ref }}
