@@ -24,56 +24,59 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Apply exact status-runtime arguments
+      - name: Apply status-runtime arguments with counted regexes
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           tool_calls = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs')
           text = tool_calls.read_text()
-          old = '''crate::session::pending_interaction::PendingInteractionGuard::new(
-                          self.pending_interactions.clone(),
-                          self.notifications.gateway.clone(),'''
-          new = '''crate::session::pending_interaction::PendingInteractionGuard::new(
-                          self.pending_interactions.clone(),
-                          self.status_runtime.clone(),
-                          self.notifications.gateway.clone(),'''
-          if text.count(old) != 1:
-              raise SystemExit(f'permission guard replacement count={text.count(old)}')
-          text = text.replace(old, new)
-
-          old = '''crate::session::pending_interaction::PendingInteractionGuard::new(
-                  self.pending_interactions.clone(),
-                  self.notifications.gateway.clone(),'''
-          new = '''crate::session::pending_interaction::PendingInteractionGuard::new(
-                  self.pending_interactions.clone(),
-                  self.status_runtime.clone(),
-                  self.notifications.gateway.clone(),'''
-          if text.count(old) != 1:
-              raise SystemExit(f'plan guard replacement count={text.count(old)}')
+          pattern = re.compile(
+              r'(PendingInteractionGuard::new\(\n(?P<indent>\s*)self\.pending_interactions\.clone\(\),\n)'
+              r'(?P=indent)self\.notifications\.gateway\.clone\(\),'
+          )
+          def add_self_status(match):
+              indent = match.group('indent')
+              return (
+                  match.group(1)
+                  + indent + 'self.status_runtime.clone(),\n'
+                  + indent + 'self.notifications.gateway.clone(),'
+              )
+          text, count = pattern.subn(add_self_status, text)
+          if count != 2:
+              raise SystemExit(f'tool_calls guard replacement count={count}, expected 2')
           tool_calls.write_text(text)
 
           spawn = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs')
           text = spawn.read_text()
-          old = '''        let pending_interactions = session.pending_interactions.clone();
-          let session_for_hooks = session.clone();'''
-          new = '''        let pending_interactions = session.pending_interactions.clone();
-          let status_runtime = session.status_runtime.clone();
-          let session_for_hooks = session.clone();'''
-          if text.count(old) != 1:
-              raise SystemExit(f'spawn status clone replacement count={text.count(old)}')
-          text = text.replace(old, new)
+          text, clone_count = re.subn(
+              r'(?m)^(?P<indent>\s*)let pending_interactions = session\.pending_interactions\.clone\(\);$',
+              lambda m: (
+                  m.group(0) + '\n' + m.group('indent')
+                  + 'let status_runtime = session.status_runtime.clone();'
+              ),
+              text,
+              count=1,
+          )
+          if clone_count != 1:
+              raise SystemExit(f'spawn status clone replacement count={clone_count}, expected 1')
 
-          old = '''crate::session::pending_interaction::PendingInteractionGuard::new(
-                              pending_interactions.clone(),
-                              gateway.clone(),'''
-          new = '''crate::session::pending_interaction::PendingInteractionGuard::new(
-                              pending_interactions.clone(),
-                              status_runtime.clone(),
-                              gateway.clone(),'''
-          if text.count(old) != 1:
-              raise SystemExit(f'question guard replacement count={text.count(old)}')
+          pattern = re.compile(
+              r'(PendingInteractionGuard::new\(\n(?P<indent>\s*)pending_interactions\.clone\(\),\n)'
+              r'(?P=indent)gateway\.clone\(\),'
+          )
+          def add_spawn_status(match):
+              indent = match.group('indent')
+              return (
+                  match.group(1)
+                  + indent + 'status_runtime.clone(),\n'
+                  + indent + 'gateway.clone(),'
+              )
+          text, guard_count = pattern.subn(add_spawn_status, text)
+          if guard_count != 1:
+              raise SystemExit(f'spawn question guard replacement count={guard_count}, expected 1')
           spawn.write_text(text)
           PY
 
