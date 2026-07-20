@@ -180,8 +180,6 @@ fn custom_provider_does_not_change_default_without_explicit_flag() {
             "model-v2",
             "--base-url",
             "http://localhost:1234/v1",
-            "--api-key-env",
-            "LOCAL_MODEL_API_KEY",
             "--context-window",
             "65536",
             "--json",
@@ -197,6 +195,7 @@ fn custom_provider_does_not_change_default_without_explicit_flag() {
     let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
     assert!(config.contains("default = \"existing/model\""));
     assert!(config.contains("[model.\"local/model-v2\"]"));
+    assert!(!config.contains("env_key ="));
     let _ = std::fs::remove_dir_all(home);
 }
 
