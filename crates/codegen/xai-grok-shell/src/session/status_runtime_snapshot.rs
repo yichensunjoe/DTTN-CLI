@@ -247,7 +247,10 @@ impl StatusRuntimePublisher {
         prompt_id: &str,
         run_state: StatusRunState,
     ) -> Option<Arc<StatusRuntimeSnapshot>> {
-        debug_assert!(matches!(run_state, StatusRunState::Idle | StatusRunState::Failed));
+        debug_assert!(matches!(
+            run_state,
+            StatusRunState::Idle | StatusRunState::Failed
+        ));
         self.update_if(|snapshot| {
             if snapshot.active_prompt_id.as_deref() != Some(prompt_id) {
                 return false;
