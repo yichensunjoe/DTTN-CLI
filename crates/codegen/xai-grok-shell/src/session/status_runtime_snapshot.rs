@@ -134,6 +134,32 @@ pub struct StatusUsageTotals {
 }
 
 impl StatusUsageTotals {
+    pub fn from_prompt_usage(usage: &crate::extensions::notification::PromptUsage) -> Self {
+        let totals = &usage.totals;
+        Self {
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cached_read_tokens: totals.cached_read_tokens,
+            model_calls: totals.model_calls,
+            api_duration_ms: totals.api_duration_ms,
+            cost_usd_ticks: totals.cost_usd_ticks,
+            cost_trusted: !usage.usage_is_incomplete && !totals.cost_is_partial,
+        }
+    }
+
+    pub fn from_session_ledger(ledger: &xai_chat_state::UsageLedger) -> Self {
+        let totals = &ledger.totals;
+        Self {
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cached_read_tokens: totals.cached_read_tokens,
+            model_calls: totals.model_calls,
+            api_duration_ms: totals.api_duration_ms,
+            cost_usd_ticks: totals.cost_usd_ticks,
+            cost_trusted: !ledger.incomplete && !totals.cost_is_partial(),
+        }
+    }
+
     fn trusted_cost_microunits(self) -> Option<u64> {
         if !self.cost_trusted {
             return None;

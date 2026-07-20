@@ -289,6 +289,15 @@ impl SessionActor {
                     }
                 }
             };
+            let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
+            self.status_runtime.publish_usage(
+                usage.as_ref().map(
+                    crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage,
+                ),
+                session_usage.as_ref().map(
+                    crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
+                ),
+            );
             // Surface the cancel trigger on the terminal `_meta` as `cancelTrigger`.
             let cancel_trigger = result
                 .as_ref()
