@@ -187,22 +187,29 @@ fn normalize_base_url(raw: &str) -> Result<(String, bool), UserConfigError> {
     if url.is_empty() || url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
         return Err(UserConfigError::InvalidBaseUrl);
     }
-    if url.starts_with("https://") {
-        return Ok((url.to_owned(), false));
-    }
-    let Some(rest) = url.strip_prefix("http://") else {
+    let (rest, is_https) = if let Some(rest) = url.strip_prefix("https://") {
+        (rest, true)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        (rest, false)
+    } else {
         return Err(UserConfigError::InvalidBaseUrl);
     };
     let authority = rest.split('/').next().unwrap_or_default();
     if authority.is_empty() || authority.contains('@') {
         return Err(UserConfigError::InvalidBaseUrl);
     }
+    if is_https {
+        return Ok((url.to_owned(), false));
+    }
     let host = if let Some(bracketed) = authority.strip_prefix('[') {
         bracketed.split(']').next().unwrap_or_default()
     } else {
         authority.split(':').next().unwrap_or_default()
     };
-    if matches!(host, "localhost" | "127.0.0.1" | "::1") {
+    if matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    ) {
         Ok((url.to_owned(), true))
     } else {
         Err(UserConfigError::InvalidBaseUrl)
@@ -445,6 +452,29 @@ mod tests {
         assert!(raw.contains("default = \"local/model:latest\""));
         assert!(raw.contains("api_backend = \"responses\""));
         assert!(!raw.contains("env_key ="));
+    }
+
+    #[test]
+    fn credentials_embedded_in_base_url_are_rejected_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let config = CustomModelConfig {
+            provider_id: "unsafe".to_owned(),
+            model_id: "model".to_owned(),
+            display_name: None,
+            base_url: "https://secret@models.example.test/v1".to_owned(),
+            api_key_env: Some("UNSAFE_API_KEY".to_owned()),
+            api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
+            context_window: 4096,
+            max_completion_tokens: None,
+            set_default: false,
+        };
+        assert!(matches!(
+            set_custom_model_at(&path, &config),
+            Err(UserConfigError::InvalidBaseUrl)
+        ));
+        assert!(!path.exists());
     }
 
     #[test]
