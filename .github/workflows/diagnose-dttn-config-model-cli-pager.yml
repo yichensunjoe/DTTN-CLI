@@ -1,0 +1,67 @@
+name: Diagnose DTTN config model CLI pager
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose-config-cli-pager:
+    if: github.head_ref == 'automation/implement-dttn-config-model-cli'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Run pager diagnostics
+        shell: bash
+        env:
+          FEATURE_BRANCH: feat/dttn-config-model-cli
+        run: |
+          set -u
+          if [[ -f config-cli-pager-diagnostics.txt ]]; then
+            exit 0
+          fi
+          cp .github/workflows/implement-dttn-config-model-cli.yml /tmp/implementation.yml
+          git fetch origin "$FEATURE_BRANCH"
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/implementation.yml').read_text()
+          marker = "          python3 - <<'PY'\n"
+          start = text.index(marker) + len(marker)
+          end = text.index("\n          PY\n", start)
+          lines = text[start:end].splitlines()
+          script = "\n".join(line[10:] if line.startswith("          ") else line for line in lines)
+          Path('/tmp/apply_config_cli.py').write_text(script + "\n")
+          PY
+          python3 /tmp/apply_config_cli.py
+          set +e
+          {
+            echo '=== pager check ==='
+            cargo check -p xai-grok-pager
+            echo "pager_check_status=$?"
+          } > config-cli-pager-diagnostics.txt 2>&1
+          status=0
+          grep -q 'pager_check_status=0' config-cli-pager-diagnostics.txt || status=1
+          git checkout automation/implement-dttn-config-model-cli
+          cp config-cli-pager-diagnostics.txt /tmp/config-cli-pager-diagnostics.txt
+          git reset --hard "origin/automation/implement-dttn-config-model-cli"
+          cp /tmp/config-cli-pager-diagnostics.txt config-cli-pager-diagnostics.txt
+          git add config-cli-pager-diagnostics.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'ci: capture pager config CLI diagnostics'
+          git push origin HEAD:refs/heads/automation/implement-dttn-config-model-cli
+          exit "$status"
