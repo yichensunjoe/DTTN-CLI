@@ -43,6 +43,16 @@ fn model_command_updates_and_resets_config_without_starting_agent() {
     assert_eq!(payload["effectiveDefault"], "provider/model-v1");
     assert_eq!(payload["appliesTo"], "new_sessions");
 
+    let summary = run(&home, &["config"]);
+    assert!(
+        summary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    let summary_stdout = String::from_utf8_lossy(&summary.stdout);
+    assert!(summary_stdout.contains("User default:      provider/model-v1"));
+    assert!(summary_stdout.contains("Effective default: provider/model-v1"));
+
     let reset = run(&home, &["config", "model", "--reset", "--json"]);
     assert!(
         reset.status.success(),
