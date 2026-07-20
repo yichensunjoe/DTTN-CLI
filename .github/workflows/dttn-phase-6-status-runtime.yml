@@ -21,20 +21,70 @@ permissions:
   contents: read
 
 jobs:
-  proto-rustfmt:
-    name: Proto rustfmt diagnostic
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  snapshot-contract:
+    name: Snapshot contract (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Format proto build helper
-        run: rustfmt --edition 2024 --config skip_children=true crates/build/xai-proto-build/src/lib.rs
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
 
-      - name: Upload formatted proto helper
-        uses: actions/upload-artifact@v4
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install protoc --no-progress -y
+
+      - name: Test status runtime contract
+        run: cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
+
+  renderer-wiring:
+    name: Renderer wiring and formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
-          name: phase-6-proto-rustfmt
-          path: crates/build/xai-proto-build/src/lib.rs
-          if-no-files-found: error
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Validate changed Rust formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          mapfile -t changed_rust < <(
+            git diff --name-only --diff-filter=ACM \
+              "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
+          )
+          if (( ${#changed_rust[@]} > 0 )); then
+            rustfmt --edition 2024 --config skip_children=true --check "${changed_rust[@]}"
+          fi
+
+      - name: Test proto build helper
+        run: cargo test -p xai-proto-build
+
+      - name: Check production dttn binary
+        run: cargo check -p xai-grok-pager-bin --bin dttn
+
+      - name: Validate patch whitespace
+        shell: bash
+        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
