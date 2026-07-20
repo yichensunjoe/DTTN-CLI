@@ -21,6 +21,29 @@ permissions:
   contents: read
 
 jobs:
+  source-diagnostic:
+    name: Sampler wiring diagnostic
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Collect relevant source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p phase-6-source
+          cp -R crates/codegen/xai-grok-shell/src/session phase-6-source/session
+          cp -R crates/codegen/xai-grok-sampler/src phase-6-source/sampler
+          cp -R crates/codegen/xai-grok-pager/src phase-6-source/pager
+
+      - name: Upload relevant source
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-6-sampler-source
+          path: phase-6-source
+          if-no-files-found: error
+
   snapshot-contract:
     name: Snapshot contract (${{ matrix.os }})
     strategy:
