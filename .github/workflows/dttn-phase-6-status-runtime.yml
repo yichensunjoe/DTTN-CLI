@@ -34,12 +34,13 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import textwrap
 
           status = Path('crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs')
           text = status.read_text()
-          marker = '''impl StatusUsageTotals {
-              fn trusted_cost_microunits(self) -> Option<u64> {'''
-          replacement = '''impl StatusUsageTotals {
+          marker = "impl StatusUsageTotals {\n    fn trusted_cost_microunits(self) -> Option<u64> {"
+          replacement = textwrap.dedent('''\
+          impl StatusUsageTotals {
               pub fn from_prompt_usage(
                   usage: &crate::extensions::notification::PromptUsage,
               ) -> Self {
@@ -68,7 +69,8 @@ jobs:
                   }
               }
 
-              fn trusted_cost_microunits(self) -> Option<u64> {'''
+              fn trusted_cost_microunits(self) -> Option<u64> {
+          ''')
           if 'pub fn from_prompt_usage' not in text:
               count = text.count(marker)
               if count != 1:
@@ -78,48 +80,49 @@ jobs:
 
           turn_end = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn_end.rs')
           text = turn_end.read_text()
-          marker = '''            };
-              // Surface the cancel trigger on the terminal `_meta` as `cancelTrigger`.'''
-          insertion = '''            };
-              let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
-              self.status_runtime.publish_usage(
-                  usage.as_ref().map(
-                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage,
-                  ),
-                  session_usage.as_ref().map(
-                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
-                  ),
-              );
-              // Surface the cancel trigger on the terminal `_meta` as `cancelTrigger`.'''
+          marker = "            };\n            // Surface the cancel trigger on the terminal `_meta` as `cancelTrigger`."
+          insertion = textwrap.dedent('''\
+                      };
+                      let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
+                      self.status_runtime.publish_usage(
+                          usage.as_ref().map(
+                              crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage,
+                          ),
+                          session_usage.as_ref().map(
+                              crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
+                          ),
+                      );
+                      // Surface the cancel trigger on the terminal `_meta` as `cancelTrigger`.
+          ''')
           if 'let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();' not in text:
               count = text.count(marker)
               if count != 1:
                   raise SystemExit(f'turn_end insertion marker count={count}, expected 1')
-              text = text.replace(marker, insertion)
+              text = text.replace(marker, insertion.rstrip('\n'))
               turn_end.write_text(text)
 
           cancel = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs')
           text = cancel.read_text()
-          marker = '''        };
-              {
-                  let mut current_prompt_id = self'''
-          insertion = '''        };
-              let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
-              self.status_runtime.publish_usage(
-                  cancelled_usage.as_ref().map(
-                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage,
-                  ),
-                  session_usage.as_ref().map(
-                      crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
-                  ),
-              );
-              {
-                  let mut current_prompt_id = self'''
+          marker = "        };\n        {\n            let mut current_prompt_id = self"
+          insertion = textwrap.dedent('''\
+                  };
+                  let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
+                  self.status_runtime.publish_usage(
+                      cancelled_usage.as_ref().map(
+                          crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage,
+                      ),
+                      session_usage.as_ref().map(
+                          crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
+                      ),
+                  );
+                  {
+                      let mut current_prompt_id = self
+          ''')
           if text.count('StatusUsageTotals::from_prompt_usage') == 0:
               count = text.count(marker)
               if count != 1:
                   raise SystemExit(f'cancel insertion marker count={count}, expected 1')
-              text = text.replace(marker, insertion)
+              text = text.replace(marker, insertion.rstrip('\n'))
               cancel.write_text(text)
           PY
 
