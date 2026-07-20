@@ -65,7 +65,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes protobuf-compiler
 
-      - name: Format changed Rust for diagnostics
+      - name: Validate changed Rust formatting
         shell: bash
         run: |
           set -euo pipefail
@@ -75,18 +75,8 @@ jobs:
               "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
           )
           if (( ${#changed_rust[@]} > 0 )); then
-            rustfmt --edition 2024 --config skip_children=true "${changed_rust[@]}"
+            rustfmt --edition 2024 --config skip_children=true --check "${changed_rust[@]}"
           fi
-
-      - name: Upload formatted status files
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase-6-rustfmt
-          path: |
-            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs
-            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs
-            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
-          if-no-files-found: error
 
       - name: Check production dttn binary
         run: cargo check -p xai-grok-pager-bin --bin dttn
