@@ -16,28 +16,80 @@ permissions:
   contents: read
 
 jobs:
-  pending-interaction-diagnostic:
-    name: Pending interaction diagnostic
+  pending-interaction-patch:
+    name: Pending interaction integration patch
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Format pending interaction module
-        run: rustfmt --edition 2024 --config skip_children=true crates/codegen/xai-grok-shell/src/session/pending_interaction.rs
-
-      - name: Locate guard construction sites
+      - name: Apply exact status-runtime arguments
         shell: bash
         run: |
-          grep -R -n --include='*.rs' 'PendingInteractionGuard::new' crates > pending-interaction-callsites.txt
-          cat pending-interaction-callsites.txt
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Upload integration diagnostics
+          tool_calls = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs')
+          text = tool_calls.read_text()
+          old = '''crate::session::pending_interaction::PendingInteractionGuard::new(
+                          self.pending_interactions.clone(),
+                          self.notifications.gateway.clone(),'''
+          new = '''crate::session::pending_interaction::PendingInteractionGuard::new(
+                          self.pending_interactions.clone(),
+                          self.status_runtime.clone(),
+                          self.notifications.gateway.clone(),'''
+          if text.count(old) != 1:
+              raise SystemExit(f'permission guard replacement count={text.count(old)}')
+          text = text.replace(old, new)
+
+          old = '''crate::session::pending_interaction::PendingInteractionGuard::new(
+                  self.pending_interactions.clone(),
+                  self.notifications.gateway.clone(),'''
+          new = '''crate::session::pending_interaction::PendingInteractionGuard::new(
+                  self.pending_interactions.clone(),
+                  self.status_runtime.clone(),
+                  self.notifications.gateway.clone(),'''
+          if text.count(old) != 1:
+              raise SystemExit(f'plan guard replacement count={text.count(old)}')
+          tool_calls.write_text(text)
+
+          spawn = Path('crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs')
+          text = spawn.read_text()
+          old = '''        let pending_interactions = session.pending_interactions.clone();
+          let session_for_hooks = session.clone();'''
+          new = '''        let pending_interactions = session.pending_interactions.clone();
+          let status_runtime = session.status_runtime.clone();
+          let session_for_hooks = session.clone();'''
+          if text.count(old) != 1:
+              raise SystemExit(f'spawn status clone replacement count={text.count(old)}')
+          text = text.replace(old, new)
+
+          old = '''crate::session::pending_interaction::PendingInteractionGuard::new(
+                              pending_interactions.clone(),
+                              gateway.clone(),'''
+          new = '''crate::session::pending_interaction::PendingInteractionGuard::new(
+                              pending_interactions.clone(),
+                              status_runtime.clone(),
+                              gateway.clone(),'''
+          if text.count(old) != 1:
+              raise SystemExit(f'question guard replacement count={text.count(old)}')
+          spawn.write_text(text)
+          PY
+
+      - name: Format integration files
+        run: |
+          rustfmt --edition 2024 --config skip_children=true \
+            crates/codegen/xai-grok-shell/src/session/pending_interaction.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs
+
+      - name: Upload patched integration files
         uses: actions/upload-artifact@v4
         with:
-          name: phase-6-pending-interaction-diagnostic
+          name: phase-6-pending-interaction-patch
           path: |
             crates/codegen/xai-grok-shell/src/session/pending_interaction.rs
-            pending-interaction-callsites.txt
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs
           if-no-files-found: error
