@@ -74,6 +74,7 @@ impl AgentTask {
         persist_ack: Option<oneshot::Sender<()>>,
         parsed_prompt_tx: Option<oneshot::Sender<ParsedPromptInfo>>,
     ) -> Self {
+        session.status_runtime.begin_turn(prompt_id.clone());
         let pid = prompt_id.clone();
         Self {
             prompt_id,
@@ -240,6 +241,16 @@ impl SessionActor {
             .lock()
             .expect("current_prompt_id mutex poisoned")
             .clone();
+        let cancelling_prompt_id = {
+            let state = self.state.lock().await;
+            state
+                .running_prompt_id()
+                .map(str::to_owned)
+                .or_else(|| pinned_prompt_id.clone())
+        };
+        if let Some(prompt_id) = cancelling_prompt_id.as_deref() {
+            self.status_runtime.mark_cancelling(prompt_id);
+        }
         {
             xai_grok_telemetry::unified_log::info(
                 "shell.cancel.processing",
@@ -424,7 +435,8 @@ impl SessionActor {
         let cancelled_prompt_id = running_task
             .as_ref()
             .map(|t| t.prompt_id.clone())
-            .or(pinned_prompt_id);
+            .or(pinned_prompt_id)
+            .or(cancelling_prompt_id);
 
         self.agent
             .borrow()
@@ -521,6 +533,12 @@ impl SessionActor {
                 .lock()
                 .expect("current_prompt_id mutex poisoned");
             *current_prompt_id = None;
+        }
+        if let Some(prompt_id) = cancelled_prompt_id.as_deref() {
+            self.status_runtime.finish_turn(
+                prompt_id,
+                crate::session::status_runtime_snapshot::StatusRunState::Idle,
+            );
         }
         if rewound_input.is_none()
             && let Some(prompt_id) = cancelled_prompt_id
