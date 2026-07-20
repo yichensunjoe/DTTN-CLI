@@ -1,0 +1,540 @@
+name: Implement DTTN config model CLI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  implement-config-cli:
+    if: github.head_ref == 'automation/implement-dttn-config-model-cli'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Apply and validate config CLI
+        shell: bash
+        env:
+          FEATURE_BRANCH: feat/dttn-config-model-cli
+        run: |
+          set -euo pipefail
+          git fetch origin "$FEATURE_BRANCH"
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "crates/codegen/xai-grok-config/Cargo.toml",
+              "toml = { workspace = true }\n",
+              "toml = { workspace = true }\ntoml_edit = { workspace = true }\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-config/src/lib.rs",
+              "pub mod signed_policy;\n",
+              "pub mod signed_policy;\npub mod user_config;\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-pager/src/lib.rs",
+              "pub mod completions_cmd;\n",
+              "pub mod completions_cmd;\npub mod config_cmd;\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-pager/src/app/cli.rs",
+              "    /// Show the configuration Grok discovers for this directory\n"
+              "    Inspect {\n"
+              "        /// Emit machine-readable JSON output.\n"
+              "        #[arg(long)]\n"
+              "        json: bool,\n"
+              "    },\n",
+              "    /// Show the configuration DTTN discovers for this directory\n"
+              "    Inspect {\n"
+              "        /// Emit machine-readable JSON output.\n"
+              "        #[arg(long)]\n"
+              "        json: bool,\n"
+              "    },\n"
+              "    /// Read or update persistent user configuration without starting an agent\n"
+              "    Config(crate::config_cmd::ConfigArgs),\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-pager/src/app/cli.rs",
+              "    name = \"grok\",\n"
+              "    version = version_with_channel(),\n"
+              "    about = \"Grok Build TUI\",\n",
+              "    name = \"dttn\",\n"
+              "    version = version_with_channel(),\n"
+              "    about = \"DTTN Agent CLI\",\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-pager-bin/src/main.rs",
+              "            Command::Inspect { json } => {\n"
+              "                let cwd = std::env::current_dir().unwrap_or_default();\n"
+              "                xai_grok_shell::inspect::inspect(&cwd, json).await?;\n"
+              "                return Ok(());\n"
+              "            }\n",
+              "            Command::Inspect { json } => {\n"
+              "                let cwd = std::env::current_dir().unwrap_or_default();\n"
+              "                xai_grok_shell::inspect::inspect(&cwd, json).await?;\n"
+              "                return Ok(());\n"
+              "            }\n"
+              "            Command::Config(config_args) => {\n"
+              "                return xai_grok_pager::config_cmd::run(config_args);\n"
+              "            }\n",
+          )
+
+          user_config = Path("crates/codegen/xai-grok-config/src/user_config.rs")
+          user_config.write_text(r'''//! Focused read/write access to the user-owned DTTN config layer.
+          //!
+          //! This module never reads managed configuration and never starts network or
+          //! model runtime work. Updates preserve unrelated TOML formatting and comments.
+
+          use std::path::{Path, PathBuf};
+          use std::str::FromStr;
+
+          use thiserror::Error;
+          use toml_edit::{value, DocumentMut, Item, Table};
+
+          #[derive(Debug, Error)]
+          pub enum UserConfigError {
+              #[error("invalid model id: model must not be empty or contain control characters")]
+              InvalidModelId,
+              #[error("failed to read DTTN config at {path}: {source}")]
+              Read {
+                  path: PathBuf,
+                  #[source]
+                  source: std::io::Error,
+              },
+              #[error("failed to parse DTTN config at {path}: {source}")]
+              Parse {
+                  path: PathBuf,
+                  #[source]
+                  source: toml_edit::TomlError,
+              },
+              #[error("[models] in {path} is not a TOML table")]
+              ModelsNotTable { path: PathBuf },
+              #[error("failed to write DTTN config at {path}: {source}")]
+              Write {
+                  path: PathBuf,
+                  #[source]
+                  source: std::io::Error,
+              },
+          }
+
+          pub fn user_config_path() -> PathBuf {
+              crate::dttn_home().join("config.toml")
+          }
+
+          pub fn user_default_model() -> Result<Option<String>, UserConfigError> {
+              user_default_model_at(&user_config_path())
+          }
+
+          pub fn set_user_default_model(model: &str) -> Result<PathBuf, UserConfigError> {
+              let path = user_config_path();
+              set_user_default_model_at(&path, model)?;
+              Ok(path)
+          }
+
+          pub fn reset_user_default_model() -> Result<bool, UserConfigError> {
+              reset_user_default_model_at(&user_config_path())
+          }
+
+          fn validate_model_id(model: &str) -> Result<&str, UserConfigError> {
+              let model = model.trim();
+              if model.is_empty() || model.chars().any(char::is_control) {
+                  return Err(UserConfigError::InvalidModelId);
+              }
+              Ok(model)
+          }
+
+          fn load_document(path: &Path) -> Result<DocumentMut, UserConfigError> {
+              let raw = match std::fs::read_to_string(path) {
+                  Ok(raw) => raw,
+                  Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                      return Ok(DocumentMut::new());
+                  }
+                  Err(source) => {
+                      return Err(UserConfigError::Read {
+                          path: path.to_path_buf(),
+                          source,
+                      });
+                  }
+              };
+              DocumentMut::from_str(&raw).map_err(|source| UserConfigError::Parse {
+                  path: path.to_path_buf(),
+                  source,
+              })
+          }
+
+          fn user_default_model_at(path: &Path) -> Result<Option<String>, UserConfigError> {
+              let document = load_document(path)?;
+              Ok(document
+                  .get("models")
+                  .and_then(Item::as_table_like)
+                  .and_then(|models| models.get("default"))
+                  .and_then(Item::as_value)
+                  .and_then(|value| value.as_str())
+                  .map(str::to_owned))
+          }
+
+          fn set_user_default_model_at(path: &Path, model: &str) -> Result<(), UserConfigError> {
+              let model = validate_model_id(model)?;
+              let mut document = load_document(path)?;
+              if document.get("models").is_none() {
+                  document["models"] = Item::Table(Table::new());
+              }
+              let Some(models) = document
+                  .get_mut("models")
+                  .and_then(Item::as_table_like_mut)
+              else {
+                  return Err(UserConfigError::ModelsNotTable {
+                      path: path.to_path_buf(),
+                  });
+              };
+              models.insert("default", value(model));
+              write_document(path, &document)
+          }
+
+          fn reset_user_default_model_at(path: &Path) -> Result<bool, UserConfigError> {
+              if !path.exists() {
+                  return Ok(false);
+              }
+              let mut document = load_document(path)?;
+              let removed = match document.get_mut("models") {
+                  Some(item) => item
+                      .as_table_like_mut()
+                      .ok_or_else(|| UserConfigError::ModelsNotTable {
+                          path: path.to_path_buf(),
+                      })?
+                      .remove("default")
+                      .is_some(),
+                  None => false,
+              };
+              if removed {
+                  write_document(path, &document)?;
+              }
+              Ok(removed)
+          }
+
+          fn write_document(path: &Path, document: &DocumentMut) -> Result<(), UserConfigError> {
+              if let Some(parent) = path.parent() {
+                  std::fs::create_dir_all(parent).map_err(|source| UserConfigError::Write {
+                      path: path.to_path_buf(),
+                      source,
+                  })?;
+              }
+              super::fs_atomic::write_atomically(path, &document.to_string(), Some(0o600)).map_err(
+                  |source| UserConfigError::Write {
+                      path: path.to_path_buf(),
+                      source,
+                  },
+              )
+          }
+
+          #[cfg(test)]
+          mod tests {
+              use super::*;
+
+              #[test]
+              fn setting_model_preserves_comments_and_unrelated_tables() {
+                  let temp = tempfile::tempdir().unwrap();
+                  let path = temp.path().join("config.toml");
+                  std::fs::write(
+                      &path,
+                      "# keep this comment\n[ui]\nscreen_mode = \"minimal\"\n",
+                  )
+                  .unwrap();
+                  set_user_default_model_at(&path, "anthropic/claude-sonnet").unwrap();
+                  let raw = std::fs::read_to_string(&path).unwrap();
+                  assert!(raw.contains("# keep this comment"));
+                  assert!(raw.contains("screen_mode = \"minimal\""));
+                  assert!(raw.contains("default = \"anthropic/claude-sonnet\""));
+              }
+
+              #[test]
+              fn reset_removes_only_the_default_model() {
+                  let temp = tempfile::tempdir().unwrap();
+                  let path = temp.path().join("config.toml");
+                  std::fs::write(
+                      &path,
+                      "[models]\ndefault = \"old\"\nweb_search = \"search\"\n",
+                  )
+                  .unwrap();
+                  assert!(reset_user_default_model_at(&path).unwrap());
+                  let raw = std::fs::read_to_string(&path).unwrap();
+                  assert!(!raw.contains("default ="));
+                  assert!(raw.contains("web_search = \"search\""));
+              }
+
+              #[test]
+              fn invalid_existing_toml_is_never_overwritten() {
+                  let temp = tempfile::tempdir().unwrap();
+                  let path = temp.path().join("config.toml");
+                  std::fs::write(&path, "[models\n").unwrap();
+                  assert!(matches!(
+                      set_user_default_model_at(&path, "model"),
+                      Err(UserConfigError::Parse { .. })
+                  ));
+                  assert_eq!(std::fs::read_to_string(path).unwrap(), "[models\n");
+              }
+          }
+          ''')
+
+          config_cmd = Path("crates/codegen/xai-grok-pager/src/config_cmd.rs")
+          config_cmd.write_text(r'''//! Offline user configuration commands.
+
+          use std::path::PathBuf;
+
+          use anyhow::Context as _;
+          use clap::{Args, Subcommand};
+
+          #[derive(Debug, Clone, Args)]
+          pub struct ConfigArgs {
+              #[command(subcommand)]
+              pub command: ConfigCommand,
+          }
+
+          #[derive(Debug, Clone, Subcommand)]
+          pub enum ConfigCommand {
+              /// Show or change the persistent default model for new sessions
+              Model {
+                  /// Model ID to persist. Omit to show the current values.
+                  #[arg(value_name = "MODEL", conflicts_with = "reset")]
+                  model: Option<String>,
+                  /// Remove the user-level model override.
+                  #[arg(long)]
+                  reset: bool,
+                  /// Emit machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Print the user configuration file path
+              Path {
+                  /// Emit machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+          }
+
+          pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
+              match args.command {
+                  ConfigCommand::Model { model, reset, json } => {
+                      run_model(model.as_deref(), reset, json)
+                  }
+                  ConfigCommand::Path { json } => run_path(json),
+              }
+          }
+
+          fn run_path(json: bool) -> anyhow::Result<()> {
+              let path = xai_grok_config::user_config::user_config_path();
+              if json {
+                  println!(
+                      "{}",
+                      serde_json::to_string(&serde_json::json!({ "path": path }))?
+                  );
+              } else {
+                  println!("{}", path.display());
+              }
+              Ok(())
+          }
+
+          fn run_model(model: Option<&str>, reset: bool, json: bool) -> anyhow::Result<()> {
+              let path = xai_grok_config::user_config::user_config_path();
+              let action = if let Some(model) = model {
+                  xai_grok_config::user_config::set_user_default_model(model)
+                      .context("failed to set persistent default model")?;
+                  "set"
+              } else if reset {
+                  let removed = xai_grok_config::user_config::reset_user_default_model()
+                      .context("failed to reset persistent default model")?;
+                  if removed { "reset" } else { "unchanged" }
+              } else {
+                  "show"
+              };
+
+              let user_default = xai_grok_config::user_config::user_default_model()
+                  .context("failed to read user default model")?;
+              let effective_default = effective_default_model()?;
+
+              if json {
+                  println!(
+                      "{}",
+                      serde_json::to_string(&serde_json::json!({
+                          "action": action,
+                          "path": path,
+                          "userDefault": user_default,
+                          "effectiveDefault": effective_default,
+                          "appliesTo": "new_sessions",
+                          "resumedSessionsUseFrozenModel": true,
+                      }))?
+                  );
+                  return Ok(());
+              }
+
+              match action {
+                  "set" => println!(
+                      "Persistent default model set to {}.",
+                      user_default.as_deref().unwrap_or("<unset>")
+                  ),
+                  "reset" => println!("Removed the user-level default model override."),
+                  "unchanged" => println!("No user-level default model override was set."),
+                  _ => {}
+              }
+              println!("User default:      {}", display_model(user_default.as_deref()));
+              println!(
+                  "Effective default: {}",
+                  display_model(effective_default.as_deref())
+              );
+              println!("Config file:       {}", path.display());
+              println!("Applies to new sessions; resumed sessions keep their frozen model.");
+              if model.is_some() {
+                  println!("Use `dttn models` to inspect available catalog models.");
+              }
+              Ok(())
+          }
+
+          fn effective_default_model() -> anyhow::Result<Option<String>> {
+              let config = xai_grok_config::load_effective_config_disk_only()
+                  .context("failed to load effective DTTN configuration")?;
+              Ok(config
+                  .get("models")
+                  .and_then(|models| models.get("default"))
+                  .and_then(toml::Value::as_str)
+                  .map(str::to_owned))
+          }
+
+          fn display_model(model: Option<&str>) -> &str {
+              model.unwrap_or("<automatic>")
+          }
+
+          #[allow(dead_code)]
+          fn _path_type_check(path: PathBuf) -> PathBuf {
+              path
+          }
+          ''')
+
+          test = Path("crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs")
+          test.parent.mkdir(parents=True, exist_ok=True)
+          test.write_text(r'''use std::process::{Command, Output};
+          use std::time::{SystemTime, UNIX_EPOCH};
+
+          fn temp_home() -> std::path::PathBuf {
+              let nonce = SystemTime::now()
+                  .duration_since(UNIX_EPOCH)
+                  .unwrap()
+                  .as_nanos();
+              let path = std::env::temp_dir().join(format!(
+                  "dttn-config-cli-{}-{nonce}",
+                  std::process::id()
+              ));
+              std::fs::create_dir_all(&path).unwrap();
+              path
+          }
+
+          fn run(home: &std::path::Path, args: &[&str]) -> Output {
+              Command::new(env!("CARGO_BIN_EXE_dttn"))
+                  .env("DTTN_HOME", home)
+                  .env_remove("GROK_HOME")
+                  .args(args)
+                  .output()
+                  .unwrap()
+          }
+
+          #[test]
+          fn model_command_updates_and_resets_config_without_starting_agent() {
+              let home = temp_home();
+              let set = run(&home, &["config", "model", "provider/model-v1", "--json"]);
+              assert!(set.status.success(), "{}", String::from_utf8_lossy(&set.stderr));
+              let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+              assert!(config.contains("default = \"provider/model-v1\""));
+
+              let show = run(&home, &["config", "model", "--json"]);
+              assert!(show.status.success(), "{}", String::from_utf8_lossy(&show.stderr));
+              let payload: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+              assert_eq!(payload["userDefault"], "provider/model-v1");
+              assert_eq!(payload["effectiveDefault"], "provider/model-v1");
+              assert_eq!(payload["appliesTo"], "new_sessions");
+
+              let reset = run(&home, &["config", "model", "--reset", "--json"]);
+              assert!(
+                  reset.status.success(),
+                  "{}",
+                  String::from_utf8_lossy(&reset.stderr)
+              );
+              let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+              assert!(!config.contains("default ="));
+              let _ = std::fs::remove_dir_all(home);
+          }
+
+          #[test]
+          fn help_and_config_path_use_dttn_identity() {
+              let home = temp_home();
+              let help = run(&home, &["--help"]);
+              assert!(help.status.success());
+              let stdout = String::from_utf8_lossy(&help.stdout);
+              assert!(stdout.contains("DTTN Agent CLI"));
+              assert!(stdout.contains("dttn"));
+
+              let path = run(&home, &["config", "path"]);
+              assert!(path.status.success());
+              assert_eq!(
+                  String::from_utf8_lossy(&path.stdout).trim(),
+                  home.join("config.toml").display().to_string()
+              );
+              let _ = std::fs::remove_dir_all(home);
+          }
+          ''')
+          PY
+
+          rustfmt --edition 2024 \
+            crates/codegen/xai-grok-config/src/user_config.rs \
+            crates/codegen/xai-grok-config/src/lib.rs \
+            crates/codegen/xai-grok-pager/src/config_cmd.rs \
+            crates/codegen/xai-grok-pager/src/lib.rs \
+            crates/codegen/xai-grok-pager/src/app/cli.rs \
+            crates/codegen/xai-grok-pager-bin/src/main.rs \
+            crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs
+
+          cargo test -p xai-grok-config user_config::tests
+          cargo test -p xai-grok-pager-bin --test config_cli_contract
+          cargo check -p xai-grok-pager-bin --bin dttn
+          git diff --check
+
+          git add \
+            crates/codegen/xai-grok-config/Cargo.toml \
+            crates/codegen/xai-grok-config/src/lib.rs \
+            crates/codegen/xai-grok-config/src/user_config.rs \
+            crates/codegen/xai-grok-pager/src/lib.rs \
+            crates/codegen/xai-grok-pager/src/config_cmd.rs \
+            crates/codegen/xai-grok-pager/src/app/cli.rs \
+            crates/codegen/xai-grok-pager-bin/src/main.rs \
+            crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs \
+            Cargo.lock
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "feat: add offline dttn config model command"
+          git push origin "HEAD:refs/heads/$FEATURE_BRANCH"
