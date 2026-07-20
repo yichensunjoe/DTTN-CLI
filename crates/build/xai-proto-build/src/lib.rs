@@ -43,9 +43,9 @@ fn parse_dependency_paths(output: &str) -> anyhow::Result<Vec<String>> {
     // Protoc emits Makefile syntax: `<target>: <dependency>`. Splitting on
     // `: ` rather than the first colon preserves Windows drive prefixes such
     // as `C:\\...` in the target path.
-    let (_, first_dependency) = first_line.split_once(": ").with_context(|| {
-        format!("protoc dependency output has no target separator: {output:?}")
-    })?;
+    let (_, first_dependency) = first_line
+        .split_once(": ")
+        .with_context(|| format!("protoc dependency output has no target separator: {output:?}"))?;
 
     Ok(iter::once(first_dependency)
         .chain(lines)
@@ -140,7 +140,8 @@ impl XaiProtoBuilder {
 
         // Can only process one input file when using --dependency_out=FILE.
         for proto in protos {
-            let output_dir = tempfile::TempDir::new().context("create protoc dependency tempdir")?;
+            let output_dir =
+                tempfile::TempDir::new().context("create protoc dependency tempdir")?;
             let dependency_path = output_dir.path().join("dependencies.d");
             let descriptor_path = output_dir.path().join("descriptor.pb");
             let mut command = Command::new(protoc.unwrap_or(Path::new("protoc")));
