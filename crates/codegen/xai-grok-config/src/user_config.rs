@@ -47,7 +47,7 @@ pub struct CustomModelConfig {
     pub model_id: String,
     pub display_name: Option<String>,
     pub base_url: String,
-    pub api_key_env: String,
+    pub api_key_env: Option<String>,
     pub api_backend: CustomModelApiBackend,
     pub auth_scheme: CustomModelAuthScheme,
     pub context_window: u64,
@@ -74,6 +74,8 @@ pub enum UserConfigError {
     InvalidBaseUrl,
     #[error("invalid API key environment variable name")]
     InvalidApiKeyEnv,
+    #[error("remote custom providers require an API key environment variable")]
+    MissingApiKeyEnv,
     #[error("context window must be greater than zero and fit in a TOML integer")]
     InvalidContextWindow,
     #[error("max completion tokens must be greater than zero")]
@@ -180,13 +182,13 @@ fn validate_api_key_env(name: &str) -> Result<&str, UserConfigError> {
     Ok(name)
 }
 
-fn normalize_base_url(raw: &str) -> Result<String, UserConfigError> {
+fn normalize_base_url(raw: &str) -> Result<(String, bool), UserConfigError> {
     let url = raw.trim().trim_end_matches('/');
     if url.is_empty() || url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
         return Err(UserConfigError::InvalidBaseUrl);
     }
     if url.starts_with("https://") {
-        return Ok(url.to_owned());
+        return Ok((url.to_owned(), false));
     }
     let Some(rest) = url.strip_prefix("http://") else {
         return Err(UserConfigError::InvalidBaseUrl);
@@ -201,7 +203,7 @@ fn normalize_base_url(raw: &str) -> Result<String, UserConfigError> {
         authority.split(':').next().unwrap_or_default()
     };
     if matches!(host, "localhost" | "127.0.0.1" | "::1") {
-        Ok(url.to_owned())
+        Ok((url.to_owned(), true))
     } else {
         Err(UserConfigError::InvalidBaseUrl)
     }
@@ -264,8 +266,15 @@ fn set_default_model_in_document(
 fn set_custom_model_at(path: &Path, config: &CustomModelConfig) -> Result<String, UserConfigError> {
     let provider_id = validate_provider_id(&config.provider_id)?;
     let model_id = validate_model_id(&config.model_id)?;
-    let base_url = normalize_base_url(&config.base_url)?;
-    let api_key_env = validate_api_key_env(&config.api_key_env)?;
+    let (base_url, is_loopback) = normalize_base_url(&config.base_url)?;
+    let api_key_env = config
+        .api_key_env
+        .as_deref()
+        .map(validate_api_key_env)
+        .transpose()?;
+    if api_key_env.is_none() && !is_loopback {
+        return Err(UserConfigError::MissingApiKeyEnv);
+    }
     if config.context_window == 0 || i64::try_from(config.context_window).is_err() {
         return Err(UserConfigError::InvalidContextWindow);
     }
@@ -298,7 +307,11 @@ fn set_custom_model_at(path: &Path, config: &CustomModelConfig) -> Result<String
 
     entry.insert("model", value(model_id));
     entry.insert("base_url", value(base_url));
-    entry.insert("env_key", value(api_key_env));
+    if let Some(api_key_env) = api_key_env {
+        entry.insert("env_key", value(api_key_env));
+    } else {
+        entry.remove("env_key");
+    }
     entry.insert("api_backend", value(config.api_backend.as_config_value()));
     entry.insert("auth_scheme", value(config.auth_scheme.as_config_value()));
     entry.insert("provider_extensions", value("standard"));
@@ -390,7 +403,7 @@ mod tests {
             model_id: "code-v1".to_owned(),
             display_name: Some("Acme Code".to_owned()),
             base_url: "https://models.acme.test/v1/".to_owned(),
-            api_key_env: "ACME_API_KEY".to_owned(),
+            api_key_env: Some("ACME_API_KEY".to_owned()),
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
             context_window: 131_072,
@@ -420,7 +433,7 @@ mod tests {
             model_id: "model:latest".to_owned(),
             display_name: None,
             base_url: "http://127.0.0.1:1234/v1".to_owned(),
-            api_key_env: "LOCAL_MODEL_API_KEY".to_owned(),
+            api_key_env: None,
             api_backend: CustomModelApiBackend::Responses,
             auth_scheme: CustomModelAuthScheme::Bearer,
             context_window: 65_536,
@@ -431,6 +444,30 @@ mod tests {
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("default = \"local/model:latest\""));
         assert!(raw.contains("api_backend = \"responses\""));
+        assert!(!raw.contains("env_key ="));
+    }
+
+    #[test]
+    fn remote_custom_endpoint_requires_an_api_key_environment_variable() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let config = CustomModelConfig {
+            provider_id: "remote".to_owned(),
+            model_id: "model".to_owned(),
+            display_name: None,
+            base_url: "https://models.example.test/v1".to_owned(),
+            api_key_env: None,
+            api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
+            context_window: 4096,
+            max_completion_tokens: None,
+            set_default: false,
+        };
+        assert!(matches!(
+            set_custom_model_at(&path, &config),
+            Err(UserConfigError::MissingApiKeyEnv)
+        ));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -442,7 +479,7 @@ mod tests {
             model_id: "model".to_owned(),
             display_name: None,
             base_url: "http://models.example.test/v1".to_owned(),
-            api_key_env: "UNSAFE_API_KEY".to_owned(),
+            api_key_env: Some("UNSAFE_API_KEY".to_owned()),
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
             context_window: 4096,
