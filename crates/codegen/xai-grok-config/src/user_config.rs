@@ -26,6 +26,21 @@ impl CustomModelApiBackend {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomModelAuthScheme {
+    Bearer,
+    XApiKey,
+}
+
+impl CustomModelAuthScheme {
+    pub fn as_config_value(self) -> &'static str {
+        match self {
+            Self::Bearer => "bearer",
+            Self::XApiKey => "x_api_key",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomModelConfig {
     pub provider_id: String,
@@ -34,6 +49,7 @@ pub struct CustomModelConfig {
     pub base_url: String,
     pub api_key_env: String,
     pub api_backend: CustomModelApiBackend,
+    pub auth_scheme: CustomModelAuthScheme,
     pub context_window: u64,
     pub max_completion_tokens: Option<u32>,
     pub set_default: bool,
@@ -284,6 +300,7 @@ fn set_custom_model_at(path: &Path, config: &CustomModelConfig) -> Result<String
     entry.insert("base_url", value(base_url));
     entry.insert("env_key", value(api_key_env));
     entry.insert("api_backend", value(config.api_backend.as_config_value()));
+    entry.insert("auth_scheme", value(config.auth_scheme.as_config_value()));
     entry.insert("provider_extensions", value("standard"));
     entry.insert("context_window", value(config.context_window as i64));
     entry.insert("agent_type", value("dttn-code-agent"));
@@ -375,6 +392,7 @@ mod tests {
             base_url: "https://models.acme.test/v1/".to_owned(),
             api_key_env: "ACME_API_KEY".to_owned(),
             api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
             context_window: 131_072,
             max_completion_tokens: Some(8192),
             set_default: false,
@@ -388,6 +406,7 @@ mod tests {
         assert!(raw.contains("base_url = \"https://models.acme.test/v1\""));
         assert!(raw.contains("env_key = \"ACME_API_KEY\""));
         assert!(raw.contains("api_backend = \"chat_completions\""));
+        assert!(raw.contains("auth_scheme = \"bearer\""));
         assert!(raw.contains("provider_extensions = \"standard\""));
         assert!(raw.contains("context_window = 131072"));
     }
@@ -403,6 +422,7 @@ mod tests {
             base_url: "http://127.0.0.1:1234/v1".to_owned(),
             api_key_env: "LOCAL_MODEL_API_KEY".to_owned(),
             api_backend: CustomModelApiBackend::Responses,
+            auth_scheme: CustomModelAuthScheme::Bearer,
             context_window: 65_536,
             max_completion_tokens: None,
             set_default: true,
@@ -424,6 +444,7 @@ mod tests {
             base_url: "http://models.example.test/v1".to_owned(),
             api_key_env: "UNSAFE_API_KEY".to_owned(),
             api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
             context_window: 4096,
             max_completion_tokens: None,
             set_default: false,
