@@ -1,0 +1,78 @@
+name: Diagnose DTTN config model CLI fast
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose-config-cli-fast:
+    if: github.head_ref == 'automation/implement-dttn-config-model-cli'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Run focused diagnostics
+        shell: bash
+        env:
+          FEATURE_BRANCH: feat/dttn-config-model-cli
+        run: |
+          set -u
+          if [[ -f config-cli-fast-diagnostics.txt ]]; then
+            exit 0
+          fi
+          cp .github/workflows/implement-dttn-config-model-cli.yml /tmp/implementation.yml
+          git fetch origin "$FEATURE_BRANCH"
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/implementation.yml').read_text()
+          marker = "          python3 - <<'PY'\n"
+          start = text.index(marker) + len(marker)
+          end = text.index("\n          PY\n", start)
+          lines = text[start:end].splitlines()
+          script = "\n".join(line[10:] if line.startswith("          ") else line for line in lines)
+          Path('/tmp/apply_config_cli.py').write_text(script + "\n")
+          PY
+          python3 /tmp/apply_config_cli.py
+          set +e
+          {
+            echo '=== rustfmt ==='
+            rustfmt --edition 2024 --check \
+              crates/codegen/xai-grok-config/src/user_config.rs \
+              crates/codegen/xai-grok-config/src/lib.rs \
+              crates/codegen/xai-grok-pager/src/config_cmd.rs \
+              crates/codegen/xai-grok-pager/src/lib.rs \
+              crates/codegen/xai-grok-pager/src/app/cli.rs \
+              crates/codegen/xai-grok-pager-bin/src/main.rs \
+              crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs
+            echo "rustfmt_status=$?"
+            echo '=== config check ==='
+            cargo check -p xai-grok-config
+            echo "config_check_status=$?"
+          } > config-cli-fast-diagnostics.txt 2>&1
+          status=0
+          grep -q 'config_check_status=0' config-cli-fast-diagnostics.txt || status=1
+          git checkout automation/implement-dttn-config-model-cli
+          cp /tmp/apply_config_cli.py /tmp/apply_config_cli.saved.py
+          cp config-cli-fast-diagnostics.txt /tmp/config-cli-fast-diagnostics.txt
+          git reset --hard "origin/automation/implement-dttn-config-model-cli"
+          cp /tmp/config-cli-fast-diagnostics.txt config-cli-fast-diagnostics.txt
+          git add config-cli-fast-diagnostics.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'ci: capture config CLI compile diagnostics'
+          git push origin HEAD:refs/heads/automation/implement-dttn-config-model-cli
+          exit "$status"
