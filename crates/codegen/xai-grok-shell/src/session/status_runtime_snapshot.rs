@@ -7,6 +7,8 @@ use std::sync::{Arc, RwLock};
 
 use super::session_model_snapshot::ResolvedSessionModelSnapshot;
 
+const USD_TICKS_PER_MICROUNIT: u64 = 10_000;
+
 /// Coarse execution state rendered by status surfaces.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum StatusRunState {
@@ -69,9 +71,10 @@ impl From<&ResolvedSessionModelSnapshot> for StatusModelContract {
 pub struct StatusTokenUsage {
     pub turn_input: u64,
     pub turn_output: u64,
+    pub turn_cached_input: u64,
     pub session_input: u64,
     pub session_output: u64,
-    pub cached_input: u64,
+    pub session_cached_input: u64,
 }
 
 impl StatusTokenUsage {
@@ -93,7 +96,11 @@ impl StatusTokenUsage {
     }
 }
 
-/// Cost values use integer provider-currency micro-units to avoid drift.
+/// Trusted server-billed cost values expressed as USD micro-units.
+///
+/// Model-catalog prices retain their native provider currency in
+/// [`StatusModelContract`]. Runtime cost is USD because the sampler ledger's
+/// authoritative cost contract is USD ticks (1e10 ticks per USD).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatusCost {
     pub currency: Option<String>,
@@ -103,9 +110,41 @@ pub struct StatusCost {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StatusLatency {
+    /// Aggregate provider API duration for the completed turn.
+    pub turn_api_duration_ms: Option<u64>,
+    /// Absolute aggregate provider API duration for the restored/current session.
+    pub session_api_duration_ms: Option<u64>,
+    /// Last individual inference request duration; populated by sampler events later.
     pub last_request_ms: Option<u64>,
     pub time_to_first_token_ms: Option<u64>,
     pub last_tool_ms: Option<u64>,
+}
+
+/// Normalized usage publication produced from the prompt/session billing ledgers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StatusUsageTotals {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_read_tokens: u64,
+    pub model_calls: u64,
+    pub api_duration_ms: u64,
+    pub cost_usd_ticks: Option<i64>,
+    /// False when the ledger is incomplete or its cost is partial.
+    pub cost_trusted: bool,
+}
+
+impl StatusUsageTotals {
+    fn trusted_cost_microunits(self) -> Option<u64> {
+        if !self.cost_trusted {
+            return None;
+        }
+        let ticks = u64::try_from(self.cost_usd_ticks?).ok()?;
+        Some(ticks / USD_TICKS_PER_MICROUNIT)
+    }
+
+    fn api_duration(self) -> Option<u64> {
+        (self.model_calls > 0).then_some(self.api_duration_ms)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -222,10 +261,48 @@ impl StatusRuntimePublisher {
             snapshot.run_state = StatusRunState::Running;
             snapshot.tokens.turn_input = 0;
             snapshot.tokens.turn_output = 0;
+            snapshot.tokens.turn_cached_input = 0;
             snapshot.cost.turn_microunits = None;
-            snapshot.latency = StatusLatency::default();
+            snapshot.latency.turn_api_duration_ms = None;
+            snapshot.latency.last_request_ms = None;
+            snapshot.latency.time_to_first_token_ms = None;
+            snapshot.latency.last_tool_ms = None;
             snapshot.tools.active_count = 0;
             snapshot.tools.last_tool_name = None;
+        })
+    }
+
+    /// Publish a completed turn ledger plus an absolute session ledger.
+    ///
+    /// Session totals are replaced rather than incremented so resumed sessions
+    /// preserve their complete historical usage and duplicate terminal events
+    /// cannot double-count. If the session ledger is temporarily unavailable,
+    /// the last known absolute session values remain unchanged.
+    pub fn publish_usage(
+        &self,
+        turn: Option<StatusUsageTotals>,
+        session: Option<StatusUsageTotals>,
+    ) -> Arc<StatusRuntimeSnapshot> {
+        self.update(|snapshot| {
+            if let Some(turn) = turn {
+                snapshot.tokens.turn_input = turn.input_tokens;
+                snapshot.tokens.turn_output = turn.output_tokens;
+                snapshot.tokens.turn_cached_input = turn.cached_read_tokens;
+                snapshot.cost.turn_microunits = turn.trusted_cost_microunits();
+                snapshot.latency.turn_api_duration_ms = turn.api_duration();
+            }
+
+            if let Some(session) = session {
+                snapshot.tokens.session_input = session.input_tokens;
+                snapshot.tokens.session_output = session.output_tokens;
+                snapshot.tokens.session_cached_input = session.cached_read_tokens;
+                snapshot.cost.session_microunits = session.trusted_cost_microunits();
+                snapshot.latency.session_api_duration_ms = session.api_duration();
+            }
+
+            snapshot.cost.currency = (snapshot.cost.turn_microunits.is_some()
+                || snapshot.cost.session_microunits.is_some())
+            .then(|| "USD".to_string());
         })
     }
 
@@ -349,9 +426,10 @@ mod tests {
             tokens: StatusTokenUsage {
                 turn_input: 10,
                 turn_output: 20,
+                turn_cached_input: 5,
                 session_input: 100,
                 session_output: 200,
-                cached_input: 30,
+                session_cached_input: 30,
             },
             cost: StatusCost {
                 currency: Some("USD".to_string()),
@@ -359,6 +437,8 @@ mod tests {
                 session_microunits: Some(50),
             },
             latency: StatusLatency {
+                turn_api_duration_ms: Some(80),
+                session_api_duration_ms: Some(500),
                 last_request_ms: Some(100),
                 time_to_first_token_ms: Some(20),
                 last_tool_ms: Some(5),
@@ -374,15 +454,84 @@ mod tests {
         let running = publisher.begin_turn("turn-a");
         assert_eq!(running.tokens.turn_input, 0);
         assert_eq!(running.tokens.turn_output, 0);
+        assert_eq!(running.tokens.turn_cached_input, 0);
         assert_eq!(running.tokens.session_input, 100);
         assert_eq!(running.tokens.session_output, 200);
-        assert_eq!(running.tokens.cached_input, 30);
+        assert_eq!(running.tokens.session_cached_input, 30);
         assert_eq!(running.cost.turn_microunits, None);
         assert_eq!(running.cost.session_microunits, Some(50));
-        assert_eq!(running.latency, StatusLatency::default());
+        assert_eq!(running.latency.turn_api_duration_ms, None);
+        assert_eq!(running.latency.session_api_duration_ms, Some(500));
+        assert_eq!(running.latency.last_request_ms, None);
+        assert_eq!(running.latency.time_to_first_token_ms, None);
+        assert_eq!(running.latency.last_tool_ms, None);
         assert_eq!(running.tools.active_count, 0);
         assert_eq!(running.tools.queued_count, 3);
         assert_eq!(running.tools.last_tool_name, None);
+    }
+
+    #[test]
+    fn usage_publication_replaces_session_totals_and_fails_closed_on_cost() {
+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+        let published = publisher.publish_usage(
+            Some(StatusUsageTotals {
+                input_tokens: 100,
+                output_tokens: 20,
+                cached_read_tokens: 40,
+                model_calls: 2,
+                api_duration_ms: 1250,
+                cost_usd_ticks: Some(25_000),
+                cost_trusted: true,
+            }),
+            Some(StatusUsageTotals {
+                input_tokens: 1_000,
+                output_tokens: 200,
+                cached_read_tokens: 400,
+                model_calls: 7,
+                api_duration_ms: 5000,
+                cost_usd_ticks: Some(999_999),
+                cost_trusted: false,
+            }),
+        );
+
+        assert_eq!(published.tokens.turn_input, 100);
+        assert_eq!(published.tokens.turn_output, 20);
+        assert_eq!(published.tokens.turn_cached_input, 40);
+        assert_eq!(published.tokens.session_input, 1_000);
+        assert_eq!(published.tokens.session_output, 200);
+        assert_eq!(published.tokens.session_cached_input, 400);
+        assert_eq!(published.cost.turn_microunits, Some(2));
+        assert_eq!(published.cost.session_microunits, None);
+        assert_eq!(published.cost.currency.as_deref(), Some("USD"));
+        assert_eq!(published.latency.turn_api_duration_ms, Some(1250));
+        assert_eq!(published.latency.session_api_duration_ms, Some(5000));
+    }
+
+    #[test]
+    fn usage_publication_uses_absolute_session_values() {
+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+        let first = StatusUsageTotals {
+            input_tokens: 100,
+            output_tokens: 50,
+            model_calls: 1,
+            ..Default::default()
+        };
+        publisher.publish_usage(Some(first), Some(first));
+
+        let restored_absolute = StatusUsageTotals {
+            input_tokens: 900,
+            output_tokens: 300,
+            cached_read_tokens: 250,
+            model_calls: 5,
+            api_duration_ms: 4000,
+            ..Default::default()
+        };
+        let published = publisher.publish_usage(None, Some(restored_absolute));
+        assert_eq!(published.tokens.session_input, 900);
+        assert_eq!(published.tokens.session_output, 300);
+        assert_eq!(published.tokens.session_cached_input, 250);
+        assert_eq!(published.tokens.turn_input, 100);
+        assert_eq!(published.tokens.turn_output, 50);
     }
 
     #[test]
