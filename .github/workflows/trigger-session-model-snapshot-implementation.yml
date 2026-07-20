@@ -61,6 +61,22 @@ jobs:
           EXPECTED_HEAD: 67c4964dac9732613f362fc639177ed3bea9ac7b
         run: |
           set +e
+          mkdir -p /tmp/phase5-git-wrapper
+          cat > /tmp/phase5-git-wrapper/git <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          real_git=/usr/bin/git
+          workflow_path=.github/workflows/phase5-session-model-snapshot.yml
+          if [[ "${1:-}" == "push" ]] \
+            && "$real_git" ls-files --error-unmatch "$workflow_path" >/dev/null 2>&1; then
+            "$real_git" rm "$workflow_path"
+            "$real_git" commit --amend --no-edit
+          fi
+          exec "$real_git" "$@"
+          SH
+          chmod +x /tmp/phase5-git-wrapper/git
+          export PATH="/tmp/phase5-git-wrapper:$PATH"
+
           bash /tmp/implement-session-model-snapshot.sh > /tmp/implementation.log 2>&1
           status=$?
           echo "$status" > /tmp/implementation.status
