@@ -2,8 +2,8 @@ use std::fs;
 
 use xai_grok_sampler::SamplerConfig;
 use xai_grok_shell::session::session_model_snapshot::{
-    ResolvedSessionModelSnapshot, SESSION_MODEL_SNAPSHOT_SCHEMA_VERSION,
-    SessionModelSnapshotStore, apply_snapshot_to_sampler_config,
+    ResolvedSessionModelSnapshot, SESSION_MODEL_SNAPSHOT_SCHEMA_VERSION, SessionModelSnapshotStore,
+    apply_snapshot_to_sampler_config,
 };
 
 fn config(model: &str, context_window: u64, max_output: Option<u32>) -> SamplerConfig {
@@ -63,7 +63,8 @@ fn corrupt_newest_entry_falls_back_to_older_valid_snapshot() {
         .store(&snapshot("model-a", 128_000, Some(8_000), 100))
         .unwrap();
     fs::write(
-        temp.path().join("snapshot-99999999999999999999-corrupt.json"),
+        temp.path()
+            .join("snapshot-99999999999999999999-corrupt.json"),
         b"{not-json",
     )
     .unwrap();
