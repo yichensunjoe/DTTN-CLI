@@ -173,6 +173,17 @@ async fn run_task(
             parsed_prompt_tx,
         )
         .await;
+    let terminal_state = match &result {
+        Err(_)
+        | Ok(PromptTurnOk {
+            completion_kind: PromptCompletionKind::MaxTurnsReached { .. },
+            ..
+        }) => crate::session::status_runtime_snapshot::StatusRunState::Failed,
+        _ => crate::session::status_runtime_snapshot::StatusRunState::Idle,
+    };
+    session
+        .status_runtime
+        .finish_turn(&prompt_id, terminal_state);
     let _ = completion_tx.send((prompt_id, result));
 }
 
