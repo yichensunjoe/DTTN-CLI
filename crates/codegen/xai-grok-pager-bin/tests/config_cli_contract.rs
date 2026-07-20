@@ -65,6 +65,135 @@ fn model_command_updates_and_resets_config_without_starting_agent() {
 }
 
 #[test]
+fn config_models_lists_only_the_curated_provider_directory() {
+    let home = temp_home();
+    let output = run(&home, &["config", "models", "--json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let ids: Vec<_> = payload["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|provider| provider["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "deepseek",
+            "google",
+            "lmstudio",
+            "minimax",
+            "moonshot",
+            "ollama",
+            "ollama-cloud",
+            "openai",
+            "opencode",
+            "opencode-go",
+            "openrouter",
+            "qwen",
+            "stepfun",
+            "xiaomi",
+            "zai",
+            "custom",
+        ]
+    );
+    assert_eq!(payload["modelRefFormat"], "provider/model");
+    assert_eq!(
+        payload["customProvider"]["changesDefaultOnlyWith"],
+        "--set-default"
+    );
+    assert!(!home.join("config.toml").exists());
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn custom_provider_model_is_persisted_without_plaintext_credentials() {
+    let home = temp_home();
+    let output = run(
+        &home,
+        &[
+            "config",
+            "models",
+            "custom",
+            "acme",
+            "code-v1",
+            "--name",
+            "Acme Code",
+            "--base-url",
+            "https://models.acme.test/v1",
+            "--api-key-env",
+            "ACME_API_KEY",
+            "--context-window",
+            "131072",
+            "--max-completion-tokens",
+            "8192",
+            "--set-default",
+            "--json",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["modelRef"], "acme/code-v1");
+    assert_eq!(payload["defaultChanged"], true);
+    assert_eq!(payload["appliesTo"], "new_sessions");
+
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(config.contains("default = \"acme/code-v1\""));
+    assert!(config.contains("[model.\"acme/code-v1\"]"));
+    assert!(config.contains("model = \"code-v1\""));
+    assert!(config.contains("base_url = \"https://models.acme.test/v1\""));
+    assert!(config.contains("env_key = \"ACME_API_KEY\""));
+    assert!(config.contains("api_backend = \"chat_completions\""));
+    assert!(config.contains("context_window = 131072"));
+    assert!(config.contains("max_completion_tokens = 8192"));
+    assert!(!config.contains("sk-"));
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn custom_provider_does_not_change_default_without_explicit_flag() {
+    let home = temp_home();
+    let initial = run(&home, &["config", "model", "existing/model", "--json"]);
+    assert!(initial.status.success());
+    let custom = run(
+        &home,
+        &[
+            "config",
+            "models",
+            "custom",
+            "local",
+            "model-v2",
+            "--base-url",
+            "http://localhost:1234/v1",
+            "--api-key-env",
+            "LOCAL_MODEL_API_KEY",
+            "--context-window",
+            "65536",
+            "--json",
+        ],
+    );
+    assert!(
+        custom.status.success(),
+        "{}",
+        String::from_utf8_lossy(&custom.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&custom.stdout).unwrap();
+    assert_eq!(payload["defaultChanged"], false);
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(config.contains("default = \"existing/model\""));
+    assert!(config.contains("[model.\"local/model-v2\"]"));
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
 fn help_and_config_path_use_dttn_identity() {
     let home = temp_home();
     let help = run(&home, &["--help"]);
@@ -72,6 +201,10 @@ fn help_and_config_path_use_dttn_identity() {
     let stdout = String::from_utf8_lossy(&help.stdout);
     assert!(stdout.contains("DTTN Agent CLI"));
     assert!(stdout.contains("config"));
+
+    let config_help = run(&home, &["config", "--help"]);
+    assert!(config_help.status.success());
+    assert!(String::from_utf8_lossy(&config_help.stdout).contains("models"));
 
     let path = run(&home, &["config", "path"]);
     assert!(path.status.success());
