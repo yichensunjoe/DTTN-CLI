@@ -47,25 +47,8 @@ jobs:
         shell: pwsh
         run: choco install protoc --no-progress -y
 
-      - name: Test status runtime contract (Unix)
-        if: runner.os != 'Windows'
+      - name: Test status runtime contract
         run: cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
-
-      - name: Test status runtime contract (Windows diagnostics)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cargo test -p xai-grok-shell --test status_runtime_snapshot_contract *>&1 |
-            Tee-Object -FilePath status-runtime-windows.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Upload Windows test diagnostics
-        if: runner.os == 'Windows' && always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase-6-windows-test-log
-          path: status-runtime-windows.log
-          if-no-files-found: error
 
   renderer-wiring:
     name: Renderer wiring and formatting
