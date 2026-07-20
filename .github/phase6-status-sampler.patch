@@ -1,0 +1,426 @@
+diff -ruN orig/crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs new/crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs
+--- orig/crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs	2026-07-20 23:50:24.388167051 +0000
++++ new/crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs	2026-07-20 23:50:24.399765797 +0000
+@@ -869,6 +869,11 @@
+             *self.turn_stream_drained.lock() = Some(tx);
+             rx
+         };
++        let status_prompt_id = self
++            .current_prompt_id
++            .lock()
++            .expect("current_prompt_id mutex poisoned")
++            .clone();
+         let request_id = xai_grok_sampler::RequestId::random();
+         let request_id_str = request_id.as_str().to_string();
+         match self
+@@ -877,6 +882,13 @@
+             .await
+         {
+             Ok((response, metrics)) => {
++                if let Some(prompt_id) = status_prompt_id.as_deref() {
++                    self.status_runtime.publish_request_latency(
++                        prompt_id,
++                        metrics.time_to_last_byte_ms,
++                        metrics.time_to_first_token_ms,
++                    );
++                }
+                 let span = tracing::Span::current();
+                 span.record("request_id", request_id_str.as_str());
+                 if let Some(ttft) = metrics.time_to_first_token_ms {
+diff -ruN orig/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs new/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs
+--- orig/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs	2026-07-20 23:50:24.434008001 +0000
++++ new/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs	2026-07-20 23:50:24.443784137 +0000
+@@ -262,6 +262,7 @@
+         if let Some(prompt_id) = cancelling_prompt_id.as_deref() {
+             self.status_runtime.mark_cancelling(prompt_id);
+         }
++        self.status_runtime.clear_backend_tools();
+         {
+             xai_grok_telemetry::unified_log::info(
+                 "shell.cancel.processing",
+diff -ruN orig/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs new/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs
+--- orig/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs	2026-07-20 23:50:24.410751974 +0000
++++ new/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs	2026-07-20 23:50:24.422672691 +0000
+@@ -2407,8 +2407,12 @@
+                 .await;
+             }
+             SamplingEvent::Completed {
+-                response, metrics, ..
++                request_id,
++                response,
++                metrics,
+             } => {
++                self.status_runtime
++                    .finish_backend_request(request_id.as_str());
+                 if let Some(tx) = self.turn_stream_drained.lock().take() {
+                     let _ = tx.send(());
+                 }
+@@ -2493,6 +2497,8 @@
+                 .await;
+             }
+             SamplingEvent::Failed { request_id, error } => {
++                self.status_runtime
++                    .finish_backend_request(request_id.as_str());
+                 xai_grok_telemetry::unified_log::error(
+                     "shell.turn.inference_failed",
+                     Some(self.session_info.id.0.as_ref()),
+@@ -2514,7 +2520,16 @@
+                     );
+                 }
+             }
+-            SamplingEvent::BackendToolCallStarted { call_id, name, .. } => {
++            SamplingEvent::BackendToolCallStarted {
++                request_id,
++                call_id,
++                name,
++            } => {
++                self.status_runtime.begin_backend_tool(
++                    request_id.as_str(),
++                    &call_id,
++                    name.clone(),
++                );
+                 let (title, kind, raw_input) = backend_tool_display(&name);
+                 self.send_update(
+                     acp::SessionUpdate::ToolCall(
+@@ -2534,11 +2549,13 @@
+                 .await;
+             }
+             SamplingEvent::BackendToolCallCompleted {
++                request_id,
+                 call_id,
+                 name,
+                 result,
+-                ..
+             } => {
++                self.status_runtime
++                    .finish_backend_tool(request_id.as_str(), &call_id);
+                 let (title, _kind, _raw_input) = backend_tool_display(&name);
+                 self.send_update(
+                     acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+diff -ruN orig/crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs new/crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs
+--- orig/crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs	2026-07-20 23:50:24.363497510 +0000
++++ new/crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs	2026-07-20 23:50:24.374237186 +0000
+@@ -3,7 +3,8 @@
+ //! Writers publish complete immutable snapshots after runtime events. Readers only
+ //! clone an `Arc` and never perform network, filesystem, Git, or async work.
+ 
+-use std::sync::{Arc, RwLock};
++use std::collections::HashMap;
++use std::sync::{Arc, Mutex, RwLock};
+ use std::time::Instant;
+ 
+ use super::session_model_snapshot::ResolvedSessionModelSnapshot;
+@@ -115,7 +116,7 @@
+     pub turn_api_duration_ms: Option<u64>,
+     /// Absolute aggregate provider API duration for the restored/current session.
+     pub session_api_duration_ms: Option<u64>,
+-    /// Last individual inference request duration; populated by sampler events later.
++    /// Last successful individual inference request duration (TTLB).
+     pub last_request_ms: Option<u64>,
+     pub time_to_first_token_ms: Option<u64>,
+     pub last_tool_ms: Option<u64>,
+@@ -207,9 +208,26 @@
+     }
+ }
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++struct BackendToolKey {
++    request_id: String,
++    call_id: String,
++}
++
++#[derive(Debug, Clone)]
++struct BackendToolEntry {
++    prompt_id: String,
++    tool_name: String,
++    started_at: Instant,
++}
++
+ #[derive(Debug)]
+ struct StatusRuntimeInner {
+     current: RwLock<Arc<StatusRuntimeSnapshot>>,
++    /// Backend-hosted tools are driven by sampler events rather than local
++    /// dispatch futures, so their abort-safe lifecycle is tracked here by
++    /// `(request_id, call_id)`. The map never crosses the render boundary.
++    backend_tools: Mutex<HashMap<BackendToolKey, BackendToolEntry>>,
+ }
+ 
+ /// Cloneable publication handle shared by SessionActor, SessionHandle and TUI.
+@@ -267,6 +285,7 @@
+         Self {
+             inner: Arc::new(StatusRuntimeInner {
+                 current: RwLock::new(Arc::new(initial)),
++                backend_tools: Mutex::new(HashMap::new()),
+             }),
+         }
+     }
+@@ -326,6 +345,14 @@
+ 
+     /// Start a prompt-owned turn and clear only turn-scoped measurements.
+     pub fn begin_turn(&self, prompt_id: impl Into<String>) -> Arc<StatusRuntimeSnapshot> {
++        // A prior request can be abandoned without emitting a terminal sampler
++        // event (for example after cancellation). Clear its private tracker before
++        // the new prompt publishes a clean generation.
++        self.inner
++            .backend_tools
++            .lock()
++            .unwrap_or_else(|poisoned| poisoned.into_inner())
++            .clear();
+         let prompt_id = prompt_id.into();
+         self.update(|snapshot| {
+             snapshot.active_prompt_id = Some(prompt_id);
+@@ -378,6 +405,162 @@
+         })
+     }
+ 
++    /// Publish latency for one successful sampler request only while the
++    /// originating prompt still owns the snapshot. A late response from an
++    /// aborted/older turn is ignored without advancing the revision.
++    pub fn publish_request_latency(
++        &self,
++        prompt_id: &str,
++        request_ms: u64,
++        time_to_first_token_ms: Option<u64>,
++    ) -> Option<Arc<StatusRuntimeSnapshot>> {
++        self.update_if(|snapshot| {
++            if snapshot.active_prompt_id.as_deref() != Some(prompt_id) {
++                return false;
++            }
++            snapshot.latency.last_request_ms = Some(request_ms);
++            snapshot.latency.time_to_first_token_ms = time_to_first_token_ms;
++            true
++        })
++    }
++
++    /// Register a backend-hosted tool call emitted by the sampler. Duplicate
++    /// start events are idempotent and do not inflate the active count.
++    pub fn begin_backend_tool(
++        &self,
++        request_id: &str,
++        call_id: &str,
++        tool_name: impl Into<String>,
++    ) -> Option<Arc<StatusRuntimeSnapshot>> {
++        let key = BackendToolKey {
++            request_id: request_id.to_string(),
++            call_id: call_id.to_string(),
++        };
++        let mut backend_tools = self
++            .inner
++            .backend_tools
++            .lock()
++            .unwrap_or_else(|poisoned| poisoned.into_inner());
++        if backend_tools.contains_key(&key) {
++            return None;
++        }
++
++        let tool_name = tool_name.into();
++        let mut prompt_id = None;
++        let published = self.update_if(|snapshot| {
++            let Some(active_prompt_id) = snapshot.active_prompt_id.as_ref() else {
++                return false;
++            };
++            prompt_id = Some(active_prompt_id.clone());
++            snapshot.tools.active_count = snapshot.tools.active_count.saturating_add(1);
++            snapshot.tools.last_tool_name = Some(tool_name.clone());
++            true
++        });
++        if let Some(prompt_id) = prompt_id {
++            backend_tools.insert(
++                key,
++                BackendToolEntry {
++                    prompt_id,
++                    tool_name,
++                    started_at: Instant::now(),
++                },
++            );
++        }
++        published
++    }
++
++    /// Finish one backend-hosted tool call. Unknown/duplicate completions are
++    /// silent, and an entry owned by an older prompt cannot touch the new turn.
++    pub fn finish_backend_tool(
++        &self,
++        request_id: &str,
++        call_id: &str,
++    ) -> Option<Arc<StatusRuntimeSnapshot>> {
++        let entry = self
++            .inner
++            .backend_tools
++            .lock()
++            .unwrap_or_else(|poisoned| poisoned.into_inner())
++            .remove(&BackendToolKey {
++                request_id: request_id.to_string(),
++                call_id: call_id.to_string(),
++            })?;
++        self.publish_backend_tools_finished(std::slice::from_ref(&entry))
++    }
++
++    /// Close any backend tools left open when a sampler request terminates.
++    /// Normally each tool has already emitted a completion event; this is the
++    /// fail-safe for transport errors, cancellation, or truncated event streams.
++    pub fn finish_backend_request(
++        &self,
++        request_id: &str,
++    ) -> Option<Arc<StatusRuntimeSnapshot>> {
++        let entries = {
++            let mut backend_tools = self
++                .inner
++                .backend_tools
++                .lock()
++                .unwrap_or_else(|poisoned| poisoned.into_inner());
++            let keys = backend_tools
++                .keys()
++                .filter(|key| key.request_id == request_id)
++                .cloned()
++                .collect::<Vec<_>>();
++            keys.into_iter()
++                .filter_map(|key| backend_tools.remove(&key))
++                .collect::<Vec<_>>()
++        };
++        self.publish_backend_tools_finished(&entries)
++    }
++
++    /// Drop every outstanding backend-tool tracker, used by explicit cancel.
++    pub fn clear_backend_tools(&self) -> Option<Arc<StatusRuntimeSnapshot>> {
++        let entries = {
++            let mut backend_tools = self
++                .inner
++                .backend_tools
++                .lock()
++                .unwrap_or_else(|poisoned| poisoned.into_inner());
++            backend_tools.drain().map(|(_, entry)| entry).collect::<Vec<_>>()
++        };
++        self.publish_backend_tools_finished(&entries)
++    }
++
++    fn publish_backend_tools_finished(
++        &self,
++        entries: &[BackendToolEntry],
++    ) -> Option<Arc<StatusRuntimeSnapshot>> {
++        if entries.is_empty() {
++            return None;
++        }
++        self.update_if(|snapshot| {
++            let Some(active_prompt_id) = snapshot.active_prompt_id.as_deref() else {
++                return false;
++            };
++            let matching_count = entries
++                .iter()
++                .filter(|entry| entry.prompt_id == active_prompt_id)
++                .count();
++            if matching_count == 0 {
++                return false;
++            }
++            snapshot.tools.active_count = snapshot
++                .tools
++                .active_count
++                .saturating_sub(u32::try_from(matching_count).unwrap_or(u32::MAX));
++            if let Some(last) = entries
++                .iter()
++                .filter(|entry| entry.prompt_id == active_prompt_id)
++                .max_by(|left, right| left.started_at.cmp(&right.started_at))
++            {
++                snapshot.tools.last_tool_name = Some(last.tool_name.clone());
++                snapshot.latency.last_tool_ms =
++                    Some(last.started_at.elapsed().as_millis() as u64);
++            }
++            true
++        })
++    }
++
+     /// Replace the number of approved tool calls waiting to be polled.
+     pub fn queue_tools(&self, count: usize) -> Option<Arc<StatusRuntimeSnapshot>> {
+         let count = u32::try_from(count).unwrap_or(u32::MAX);
+@@ -682,6 +865,91 @@
+         assert_eq!(current.tools.last_tool_name, None);
+     }
+ 
++    #[test]
++    fn sampler_latency_is_prompt_owned_and_replaces_last_request() {
++        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
++        publisher.begin_turn("turn-a");
++        let first = publisher
++            .publish_request_latency("turn-a", 120, Some(35))
++            .expect("active prompt accepts latency");
++        assert_eq!(first.latency.last_request_ms, Some(120));
++        assert_eq!(first.latency.time_to_first_token_ms, Some(35));
++
++        let revision = first.revision;
++        publisher.begin_turn("turn-b");
++        assert!(
++            publisher
++                .publish_request_latency("turn-a", 999, Some(998))
++                .is_none()
++        );
++        let current = publisher.snapshot();
++        assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
++        assert_eq!(current.latency.last_request_ms, None);
++        assert!(current.revision > revision);
++
++        let latest = publisher
++            .publish_request_latency("turn-b", 80, None)
++            .expect("current prompt accepts latency");
++        assert_eq!(latest.latency.last_request_ms, Some(80));
++        assert_eq!(latest.latency.time_to_first_token_ms, None);
++    }
++
++    #[test]
++    fn backend_tool_events_are_idempotent_and_request_scoped() {
++        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
++        publisher.begin_turn("turn-a");
++        assert!(
++            publisher
++                .begin_backend_tool("request-1", "call-1", "web_search")
++                .is_some()
++        );
++        assert!(
++            publisher
++                .begin_backend_tool("request-1", "call-1", "web_search")
++                .is_none()
++        );
++        assert!(
++            publisher
++                .begin_backend_tool("request-1", "call-2", "x_search")
++                .is_some()
++        );
++        assert_eq!(publisher.snapshot().tools.active_count, 2);
++
++        assert!(
++            publisher
++                .finish_backend_tool("request-1", "call-1")
++                .is_some()
++        );
++        assert!(
++            publisher
++                .finish_backend_tool("request-1", "call-1")
++                .is_none()
++        );
++        assert_eq!(publisher.snapshot().tools.active_count, 1);
++
++        assert!(publisher.finish_backend_request("request-1").is_some());
++        let done = publisher.snapshot();
++        assert_eq!(done.tools.active_count, 0);
++        assert_eq!(done.tools.last_tool_name.as_deref(), Some("x_search"));
++        assert!(done.latency.last_tool_ms.is_some());
++    }
++
++    #[test]
++    fn stale_backend_tool_cannot_overwrite_new_turn() {
++        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
++        publisher.begin_turn("turn-a");
++        publisher.begin_backend_tool("request-a", "call-a", "web_search");
++        publisher.begin_turn("turn-b");
++        let revision = publisher.snapshot().revision;
++
++        assert!(publisher.finish_backend_request("request-a").is_none());
++        let current = publisher.snapshot();
++        assert_eq!(current.revision, revision);
++        assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
++        assert_eq!(current.tools.active_count, 0);
++        assert_eq!(current.tools.last_tool_name, None);
++    }
++
+     #[test]
+     fn context_percent_is_bounded_and_zero_safe() {
+         let usage = StatusTokenUsage {
