@@ -3,8 +3,8 @@
 //! Writers publish complete immutable snapshots after runtime events. Readers only
 //! clone an `Arc` and never perform network, filesystem, Git, or async work.
 
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use super::session_model_snapshot::ResolvedSessionModelSnapshot;
 
@@ -20,7 +20,7 @@ pub enum StatusRunState {
 }
 
 /// Session-frozen model contract exposed to status consumers.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatusModelContract {
     pub model_id: String,
     pub context_window: u64,
@@ -28,10 +28,13 @@ pub struct StatusModelContract {
     pub catalog_origin: Option<String>,
     pub catalog_revision: Option<String>,
     pub catalog_stale: bool,
-    /// Input price in provider currency per one million tokens.
-    pub input_price_per_million: Option<f64>,
-    /// Output price in provider currency per one million tokens.
-    pub output_price_per_million: Option<f64>,
+    pub currency: Option<String>,
+    /// Provider currency micro-units per one million input tokens.
+    pub input_per_million_microunits: Option<u64>,
+    /// Provider currency micro-units per one million cached-input tokens.
+    pub cached_input_per_million_microunits: Option<u64>,
+    /// Provider currency micro-units per one million output tokens.
+    pub output_per_million_microunits: Option<u64>,
 }
 
 impl From<&ResolvedSessionModelSnapshot> for StatusModelContract {
@@ -39,7 +42,7 @@ impl From<&ResolvedSessionModelSnapshot> for StatusModelContract {
         let pricing = snapshot
             .catalog_metadata
             .as_ref()
-            .and_then(|metadata| metadata.pricing.as_ref());
+            .map(|metadata| &metadata.pricing);
         Self {
             model_id: snapshot.model_id.clone(),
             context_window: snapshot.context_window,
@@ -47,8 +50,18 @@ impl From<&ResolvedSessionModelSnapshot> for StatusModelContract {
             catalog_origin: snapshot.catalog_origin.clone(),
             catalog_revision: snapshot.catalog_revision.clone(),
             catalog_stale: snapshot.catalog_stale,
-            input_price_per_million: pricing.and_then(|pricing| pricing.input_per_million),
-            output_price_per_million: pricing.and_then(|pricing| pricing.output_per_million),
+            currency: pricing
+                .and_then(|pricing| pricing.currency.as_ref())
+                .map(|value| value.value.clone()),
+            input_per_million_microunits: pricing
+                .and_then(|pricing| pricing.input_per_million_microunits.as_ref())
+                .map(|value| value.value),
+            cached_input_per_million_microunits: pricing
+                .and_then(|pricing| pricing.cached_input_per_million_microunits.as_ref())
+                .map(|value| value.value),
+            output_per_million_microunits: pricing
+                .and_then(|pricing| pricing.output_per_million_microunits.as_ref())
+                .map(|value| value.value),
         }
     }
 }
@@ -81,10 +94,12 @@ impl StatusTokenUsage {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+/// Cost values use integer provider-currency micro-units to avoid drift.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatusCost {
-    pub turn: Option<f64>,
-    pub session: Option<f64>,
+    pub currency: Option<String>,
+    pub turn_microunits: Option<u64>,
+    pub session_microunits: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -102,7 +117,7 @@ pub struct StatusToolActivity {
 }
 
 /// Complete immutable view consumed by the status line.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatusRuntimeSnapshot {
     /// Monotonic publication sequence. Consumers can skip duplicate renders.
     pub revision: u64,
@@ -157,7 +172,10 @@ impl StatusRuntimePublisher {
     }
 
     /// Publish a complete new immutable generation.
-    pub fn update(&self, mutate: impl FnOnce(&mut StatusRuntimeSnapshot)) -> Arc<StatusRuntimeSnapshot> {
+    pub fn update(
+        &self,
+        mutate: impl FnOnce(&mut StatusRuntimeSnapshot),
+    ) -> Arc<StatusRuntimeSnapshot> {
         let current = self.snapshot();
         let mut next = (*current).clone();
         mutate(&mut next);
