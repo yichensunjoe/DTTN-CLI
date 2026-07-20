@@ -1549,6 +1549,7 @@ pub(crate) async fn spawn_session_actor(
         let session_id = session.session_info.id.clone();
         let current_prompt_mode = session.current_prompt_mode.clone();
         let pending_interactions = session.pending_interactions.clone();
+        let status_runtime = session.status_runtime.clone();
         let session_for_hooks = session.clone();
         let mut user_question_rx = user_question_rx;
         tokio::task::spawn_local(async move {
@@ -1588,6 +1589,7 @@ pub(crate) async fn spawn_session_actor(
                     let _pending_guard =
                         crate::session::pending_interaction::PendingInteractionGuard::new(
                             pending_interactions.clone(),
+                            status_runtime.clone(),
                             gateway.clone(),
                             session_id.clone(),
                             tool_call_id.clone(),

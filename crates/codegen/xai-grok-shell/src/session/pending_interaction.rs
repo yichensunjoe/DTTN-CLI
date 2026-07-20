@@ -155,7 +155,9 @@ impl Drop for PendingInteractionGuard {
     fn drop(&mut self) {
         let removed_and_count = {
             let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            map.remove(&self.tool_call_id).is_some().then_some(map.len())
+            map.remove(&self.tool_call_id)
+                .is_some()
+                .then_some(map.len())
         };
         // First-answer-wins: only announce resolution if this guard actually
         // owned the live entry. An already-resolved id is a silent no-op.

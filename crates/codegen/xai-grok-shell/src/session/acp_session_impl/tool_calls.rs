@@ -1070,6 +1070,7 @@ impl SessionActor {
                 let _pending_guard =
                     crate::session::pending_interaction::PendingInteractionGuard::new(
                         self.pending_interactions.clone(),
+                        self.status_runtime.clone(),
                         self.notifications.gateway.clone(),
                         self.session_info.id.clone(),
                         tool_call_id.to_string(),
@@ -1396,6 +1397,7 @@ impl SessionActor {
         let resp = {
             let _pending_guard = crate::session::pending_interaction::PendingInteractionGuard::new(
                 self.pending_interactions.clone(),
+                self.status_runtime.clone(),
                 self.notifications.gateway.clone(),
                 self.session_info.id.clone(),
                 tool_call_id.to_string(),
