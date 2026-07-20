@@ -99,9 +99,9 @@ struct CustomModelArgs {
     /// Provider inference base URL
     #[arg(long, value_name = "URL")]
     base_url: String,
-    /// Environment variable containing the API key; the key itself is never persisted
+    /// Environment variable containing the API key; optional only for localhost endpoints
     #[arg(long, value_name = "ENV_VAR")]
-    api_key_env: String,
+    api_key_env: Option<String>,
     /// Compatible request protocol
     #[arg(long, value_enum, default_value = "chat-completions")]
     backend: CustomBackend,
@@ -159,7 +159,7 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
                 "providers": providers,
                 "modelRefFormat": "provider/model",
                 "customProvider": {
-                    "command": "dttn config models custom <PROVIDER> <MODEL> --base-url <URL> --api-key-env <ENV_VAR> --context-window <TOKENS>",
+                    "command": "dttn config models custom <PROVIDER> <MODEL> --base-url <URL> [--api-key-env <ENV_VAR>] --context-window <TOKENS>",
                     "supportedBackends": ["chat_completions", "responses", "messages"],
                     "supportedAuthSchemes": ["bearer", "x_api_key"],
                     "changesDefaultOnlyWith": "--set-default",
@@ -184,8 +184,9 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
     println!("Model references use `provider/model`.");
     println!("Register a custom model using a DTTN-supported API backend:");
     println!(
-        "  dttn config models custom <PROVIDER> <MODEL> --base-url <URL> --api-key-env <ENV_VAR> --context-window <TOKENS>"
+        "  dttn config models custom <PROVIDER> <MODEL> --base-url <URL> [--api-key-env <ENV_VAR>] --context-window <TOKENS>"
     );
+    println!("Remote endpoints require `--api-key-env`; localhost endpoints may omit it.");
     println!(
         "Add `--set-default` only when the new model should become the default for new sessions."
     );
