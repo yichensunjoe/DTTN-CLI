@@ -127,6 +127,8 @@ fn custom_provider_model_is_persisted_without_plaintext_credentials() {
             "https://models.acme.test/v1",
             "--api-key-env",
             "ACME_API_KEY",
+            "--backend",
+            "messages",
             "--context-window",
             "131072",
             "--max-completion-tokens",
@@ -151,7 +153,7 @@ fn custom_provider_model_is_persisted_without_plaintext_credentials() {
     assert!(config.contains("model = \"code-v1\""));
     assert!(config.contains("base_url = \"https://models.acme.test/v1\""));
     assert!(config.contains("env_key = \"ACME_API_KEY\""));
-    assert!(config.contains("api_backend = \"chat_completions\""));
+    assert!(config.contains("api_backend = \"messages\""));
     assert!(config.contains("context_window = 131072"));
     assert!(config.contains("max_completion_tokens = 8192"));
     assert!(!config.contains("sk-"));
