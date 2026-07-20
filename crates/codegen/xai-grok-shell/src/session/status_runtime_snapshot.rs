@@ -1,0 +1,210 @@
+//! Lock-bounded, I/O-free runtime status snapshots for TUI and leader clients.
+//!
+//! Writers publish complete immutable snapshots after runtime events. Readers only
+//! clone an `Arc` and never perform network, filesystem, Git, or async work.
+
+use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use super::session_model_snapshot::ResolvedSessionModelSnapshot;
+
+/// Coarse execution state rendered by status surfaces.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StatusRunState {
+    #[default]
+    Idle,
+    Running,
+    WaitingForInput,
+    Cancelling,
+    Failed,
+}
+
+/// Session-frozen model contract exposed to status consumers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StatusModelContract {
+    pub model_id: String,
+    pub context_window: u64,
+    pub max_completion_tokens: Option<u32>,
+    pub catalog_origin: Option<String>,
+    pub catalog_revision: Option<String>,
+    pub catalog_stale: bool,
+    /// Input price in provider currency per one million tokens.
+    pub input_price_per_million: Option<f64>,
+    /// Output price in provider currency per one million tokens.
+    pub output_price_per_million: Option<f64>,
+}
+
+impl From<&ResolvedSessionModelSnapshot> for StatusModelContract {
+    fn from(snapshot: &ResolvedSessionModelSnapshot) -> Self {
+        let pricing = snapshot
+            .catalog_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.pricing.as_ref());
+        Self {
+            model_id: snapshot.model_id.clone(),
+            context_window: snapshot.context_window,
+            max_completion_tokens: snapshot.max_completion_tokens,
+            catalog_origin: snapshot.catalog_origin.clone(),
+            catalog_revision: snapshot.catalog_revision.clone(),
+            catalog_stale: snapshot.catalog_stale,
+            input_price_per_million: pricing.and_then(|pricing| pricing.input_per_million),
+            output_price_per_million: pricing.and_then(|pricing| pricing.output_per_million),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StatusTokenUsage {
+    pub turn_input: u64,
+    pub turn_output: u64,
+    pub session_input: u64,
+    pub session_output: u64,
+    pub cached_input: u64,
+}
+
+impl StatusTokenUsage {
+    pub fn session_total(self) -> u64 {
+        self.session_input.saturating_add(self.session_output)
+    }
+
+    pub fn context_percent(self, context_window: u64) -> Option<u8> {
+        if context_window == 0 {
+            return None;
+        }
+        let percent = self
+            .session_total()
+            .saturating_mul(100)
+            .checked_div(context_window)
+            .unwrap_or(100)
+            .min(100);
+        Some(percent as u8)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct StatusCost {
+    pub turn: Option<f64>,
+    pub session: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StatusLatency {
+    pub last_request_ms: Option<u64>,
+    pub time_to_first_token_ms: Option<u64>,
+    pub last_tool_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StatusToolActivity {
+    pub active_count: u32,
+    pub queued_count: u32,
+    pub last_tool_name: Option<String>,
+}
+
+/// Complete immutable view consumed by the status line.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StatusRuntimeSnapshot {
+    /// Monotonic publication sequence. Consumers can skip duplicate renders.
+    pub revision: u64,
+    pub run_state: StatusRunState,
+    pub model: StatusModelContract,
+    pub tokens: StatusTokenUsage,
+    pub cost: StatusCost,
+    pub latency: StatusLatency,
+    pub tools: StatusToolActivity,
+    pub pending_interactions: u32,
+}
+
+impl StatusRuntimeSnapshot {
+    pub fn from_session_model(snapshot: &ResolvedSessionModelSnapshot) -> Self {
+        Self {
+            model: StatusModelContract::from(snapshot),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StatusRuntimeInner {
+    revision: AtomicU64,
+    current: RwLock<Arc<StatusRuntimeSnapshot>>,
+}
+
+/// Cloneable publication handle shared by SessionActor, SessionHandle and TUI.
+#[derive(Debug, Clone)]
+pub struct StatusRuntimePublisher {
+    inner: Arc<StatusRuntimeInner>,
+}
+
+impl StatusRuntimePublisher {
+    pub fn new(initial: StatusRuntimeSnapshot) -> Self {
+        let revision = initial.revision;
+        Self {
+            inner: Arc::new(StatusRuntimeInner {
+                revision: AtomicU64::new(revision),
+                current: RwLock::new(Arc::new(initial)),
+            }),
+        }
+    }
+
+    /// Read path used by renderers. It performs no I/O and no async work.
+    pub fn snapshot(&self) -> Arc<StatusRuntimeSnapshot> {
+        self.inner
+            .current
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Publish a complete new immutable generation.
+    pub fn update(&self, mutate: impl FnOnce(&mut StatusRuntimeSnapshot)) -> Arc<StatusRuntimeSnapshot> {
+        let current = self.snapshot();
+        let mut next = (*current).clone();
+        mutate(&mut next);
+        next.revision = self
+            .inner
+            .revision
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let next = Arc::new(next);
+        *self
+            .inner
+            .current
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = next.clone();
+        next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readers_observe_complete_generations() {
+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+        let published = publisher.update(|snapshot| {
+            snapshot.run_state = StatusRunState::Running;
+            snapshot.tokens.session_input = 42;
+            snapshot.tools.active_count = 1;
+        });
+        let read = publisher.snapshot();
+        assert_eq!(published.revision, 1);
+        assert_eq!(read.revision, 1);
+        assert_eq!(read.run_state, StatusRunState::Running);
+        assert_eq!(read.tokens.session_input, 42);
+        assert_eq!(read.tools.active_count, 1);
+    }
+
+    #[test]
+    fn context_percent_is_bounded_and_zero_safe() {
+        let usage = StatusTokenUsage {
+            session_input: 80,
+            session_output: 40,
+            ..Default::default()
+        };
+        assert_eq!(usage.context_percent(0), None);
+        assert_eq!(usage.context_percent(200), Some(60));
+        assert_eq!(usage.context_percent(100), Some(100));
+    }
+}
