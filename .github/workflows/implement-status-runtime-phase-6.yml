@@ -1,0 +1,178 @@
+name: Implement DTTN status runtime phase 6
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  implement-status-runtime:
+    if: github.head_ref == 'automation/implement-status-runtime-phase-6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Apply and validate Phase 6 foundation
+        shell: bash
+        env:
+          FEATURE_BRANCH: refactor/dttn-status-runtime-snapshot-phase-6
+        run: |
+          set -euo pipefail
+          git fetch origin "$FEATURE_BRANCH"
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/mod.rs",
+              "pub mod session_model_snapshot;\n",
+              "pub mod session_model_snapshot;\npub mod status_runtime_snapshot;\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/handle.rs",
+              "    pub signals_handle: super::signals::SessionSignalsHandle,\n",
+              "    pub signals_handle: super::signals::SessionSignalsHandle,\n"
+              "    /// I/O-free immutable runtime state consumed by TUI status surfaces.\n"
+              "    pub status_runtime: super::status_runtime_snapshot::StatusRuntimePublisher,\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/acp_session.rs",
+              "    pub(crate) chat_state_handle: xai_chat_state::ChatStateHandle,\n",
+              "    pub(crate) chat_state_handle: xai_chat_state::ChatStateHandle,\n"
+              "    /// Publisher for the complete immutable status-line state.\n"
+              "    pub(crate) status_runtime:\n"
+              "        crate::session::status_runtime_snapshot::StatusRuntimePublisher,\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs",
+              "    crate::session::session_model_snapshot::apply_snapshot_to_sampler_config(\n"
+              "        &mut sampling_config,\n"
+              "        &snapshot_resolution.snapshot,\n"
+              "    );\n",
+              "    crate::session::session_model_snapshot::apply_snapshot_to_sampler_config(\n"
+              "        &mut sampling_config,\n"
+              "        &snapshot_resolution.snapshot,\n"
+              "    );\n"
+              "    let status_runtime =\n"
+              "        crate::session::status_runtime_snapshot::StatusRuntimePublisher::new(\n"
+              "            crate::session::status_runtime_snapshot::StatusRuntimeSnapshot::from_session_model(\n"
+              "                &snapshot_resolution.snapshot,\n"
+              "            ),\n"
+              "        );\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs",
+              "        chat_state_handle,\n        current_prompt_id: current_prompt_id.clone(),\n",
+              "        chat_state_handle,\n        status_runtime: status_runtime.clone(),\n"
+              "        current_prompt_id: current_prompt_id.clone(),\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs",
+              "            signals_handle,\n            gateway_enabled,\n",
+              "            signals_handle,\n            status_runtime,\n            gateway_enabled,\n",
+          )
+
+          replace_once(
+              "crates/codegen/xai-grok-shell/src/session/acp_session_impl/model_switch.rs",
+              "        crate::session::session_model_snapshot::persist_explicit_model_switch(\n"
+              "            &self.session_info,\n"
+              "            &sampling_config,\n"
+              "            new_context_window.get(),\n"
+              "        );\n",
+              "        let frozen_model =\n"
+              "            crate::session::session_model_snapshot::persist_explicit_model_switch(\n"
+              "                &self.session_info,\n"
+              "                &sampling_config,\n"
+              "                new_context_window.get(),\n"
+              "            );\n"
+              "        self.status_runtime.update(|status| {\n"
+              "            status.model =\n"
+              "                crate::session::status_runtime_snapshot::StatusModelContract::from(\n"
+              "                    &frozen_model,\n"
+              "                );\n"
+              "        });\n",
+          )
+
+          test = Path("crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs")
+          test.write_text(r'''use xai_grok_shell::session::status_runtime_snapshot::{
+              StatusRunState, StatusRuntimePublisher, StatusRuntimeSnapshot, StatusTokenUsage,
+          };
+
+          #[test]
+          fn renderer_reads_complete_immutable_generations_without_async_work() {
+              let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+              let before = publisher.snapshot();
+              let after = publisher.update(|snapshot| {
+                  snapshot.run_state = StatusRunState::Running;
+                  snapshot.tokens.session_input = 120;
+                  snapshot.tokens.session_output = 30;
+              });
+              assert_eq!(before.revision, 0);
+              assert_eq!(after.revision, 1);
+              assert_eq!(after.tokens.session_total(), 150);
+              assert_eq!(publisher.snapshot().revision, 1);
+          }
+
+          #[test]
+          fn context_utilization_is_saturating_and_unknown_safe() {
+              let usage = StatusTokenUsage {
+                  session_input: 90,
+                  session_output: 30,
+                  ..Default::default()
+              };
+              assert_eq!(usage.context_percent(0), None);
+              assert_eq!(usage.context_percent(240), Some(50));
+              assert_eq!(usage.context_percent(100), Some(100));
+          }
+          ''')
+          PY
+
+          rustfmt --edition 2024 \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/mod.rs \
+            crates/codegen/xai-grok-shell/src/session/handle.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/model_switch.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+
+          cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
+          cargo check -p xai-grok-pager-bin --bin dttn
+          git diff --check
+          git add \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/mod.rs \
+            crates/codegen/xai-grok-shell/src/session/handle.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/model_switch.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "feat: add read-only status runtime snapshot"
+          git push origin "HEAD:refs/heads/$FEATURE_BRANCH"
