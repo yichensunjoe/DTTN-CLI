@@ -3,6 +3,7 @@
 //! This module never reads managed configuration and never starts network or
 //! model runtime work. Updates preserve unrelated TOML formatting and comments.
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -182,6 +183,40 @@ fn validate_api_key_env(name: &str) -> Result<&str, UserConfigError> {
     Ok(name)
 }
 
+fn authority_host(authority: &str) -> Option<&str> {
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let end = bracketed.find(']')?;
+        let host = &bracketed[..end];
+        let suffix = &bracketed[end + 1..];
+        let port_is_valid = suffix.is_empty()
+            || suffix
+                .strip_prefix(':')
+                .is_some_and(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()));
+        return port_is_valid.then_some(host);
+    }
+
+    match authority.split_once(':') {
+        Some((host, port))
+            if !host.is_empty()
+                && !port.is_empty()
+                && !host.contains(':')
+                && port.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            Some(host)
+        }
+        Some(_) => None,
+        None if !authority.is_empty() => Some(authority),
+        None => None,
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
 fn normalize_base_url(raw: &str) -> Result<(String, bool), UserConfigError> {
     let url = raw.trim().trim_end_matches('/');
     if url.is_empty() || url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
@@ -198,22 +233,12 @@ fn normalize_base_url(raw: &str) -> Result<(String, bool), UserConfigError> {
     if authority.is_empty() || authority.contains('@') {
         return Err(UserConfigError::InvalidBaseUrl);
     }
-    if is_https {
-        return Ok((url.to_owned(), false));
+    let host = authority_host(authority).ok_or(UserConfigError::InvalidBaseUrl)?;
+    let is_loopback = is_loopback_host(host);
+    if !is_https && !is_loopback {
+        return Err(UserConfigError::InvalidBaseUrl);
     }
-    let host = if let Some(bracketed) = authority.strip_prefix('[') {
-        bracketed.split(']').next().unwrap_or_default()
-    } else {
-        authority.split(':').next().unwrap_or_default()
-    };
-    if matches!(
-        host.to_ascii_lowercase().as_str(),
-        "localhost" | "127.0.0.1" | "::1"
-    ) {
-        Ok((url.to_owned(), true))
-    } else {
-        Err(UserConfigError::InvalidBaseUrl)
-    }
+    Ok((url.to_owned(), is_loopback))
 }
 
 fn load_document(path: &Path) -> Result<DocumentMut, UserConfigError> {
@@ -332,9 +357,13 @@ fn set_custom_model_at(path: &Path, config: &CustomModelConfig) -> Result<String
         .filter(|name| !name.is_empty())
     {
         entry.insert("name", value(name));
+    } else {
+        entry.remove("name");
     }
     if let Some(max_tokens) = config.max_completion_tokens {
         entry.insert("max_completion_tokens", value(i64::from(max_tokens)));
+    } else {
+        entry.remove("max_completion_tokens");
     }
 
     if config.set_default {
@@ -452,6 +481,53 @@ mod tests {
         assert!(raw.contains("default = \"local/model:latest\""));
         assert!(raw.contains("api_backend = \"responses\""));
         assert!(!raw.contains("env_key ="));
+    }
+
+    #[test]
+    fn https_loopback_endpoint_may_omit_credentials() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let config = CustomModelConfig {
+            provider_id: "local".to_owned(),
+            model_id: "secure-local".to_owned(),
+            display_name: None,
+            base_url: "https://127.0.0.2:8443/v1".to_owned(),
+            api_key_env: None,
+            api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
+            context_window: 32_768,
+            max_completion_tokens: None,
+            set_default: false,
+        };
+        set_custom_model_at(&path, &config).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("base_url = \"https://127.0.0.2:8443/v1\""));
+        assert!(!raw.contains("env_key ="));
+    }
+
+    #[test]
+    fn reregistering_custom_model_clears_omitted_optional_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let mut config = CustomModelConfig {
+            provider_id: "acme".to_owned(),
+            model_id: "code-v1".to_owned(),
+            display_name: Some("Old Name".to_owned()),
+            base_url: "https://models.acme.test/v1".to_owned(),
+            api_key_env: Some("ACME_API_KEY".to_owned()),
+            api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
+            context_window: 131_072,
+            max_completion_tokens: Some(8192),
+            set_default: false,
+        };
+        set_custom_model_at(&path, &config).unwrap();
+        config.display_name = None;
+        config.max_completion_tokens = None;
+        set_custom_model_at(&path, &config).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("name = \"Old Name\""));
+        assert!(!raw.contains("max_completion_tokens ="));
     }
 
     #[test]
