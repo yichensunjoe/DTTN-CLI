@@ -1769,6 +1769,9 @@ async fn async_main() -> Result<()> {
                 xai_grok_shell::inspect::inspect(&cwd, json).await?;
                 return Ok(());
             }
+            Command::Config(config_args) => {
+                return xai_grok_pager::config_cmd::run(config_args);
+            }
             Command::Setup { json } => {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();

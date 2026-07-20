@@ -9,12 +9,14 @@ use std::path::PathBuf;
 pub enum Command {
     /// Run Grok without the interactive UI
     Agent(Box<AgentArgs>),
-    /// Show the configuration Grok discovers for this directory
+    /// Show the configuration DTTN discovers for this directory
     Inspect {
         /// Emit machine-readable JSON output.
         #[arg(long)]
         json: bool,
     },
+    /// Read or update persistent user configuration without starting an agent
+    Config(crate::config_cmd::ConfigArgs),
     /// Manage running leader processes
     Leader(LeaderMgmtArgs),
     /// Sign out and clear cached credentials
@@ -408,9 +410,9 @@ fn version_with_channel() -> &'static str {
 }
 #[derive(Debug, Clone, Parser)]
 #[command(
-    name = "grok",
+    name = "dttn",
     version = version_with_channel(),
-    about = "Grok Build TUI",
+    about = "DTTN Agent CLI",
     disable_version_flag = true,
     next_display_order = None,
     help_template = "\
