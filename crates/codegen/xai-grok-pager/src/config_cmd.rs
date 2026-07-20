@@ -154,10 +154,7 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
             provider.auth_env.join(", ")
         };
         println!("  {:<14} {}", provider.id, provider.name);
-        println!(
-            "  {:<14} API: {}; auth: {}",
-            "", provider.api_style, auth
-        );
+        println!("  {:<14} API: {}; auth: {}", "", provider.api_style, auth);
     }
     println!();
     println!("Model references use `provider/model`.");
