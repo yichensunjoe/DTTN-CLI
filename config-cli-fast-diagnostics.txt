@@ -1,0 +1,453 @@
+=== rustfmt ===
+info: syncing channel updates for 1.92.0-x86_64-unknown-linux-gnu
+info: latest update on 2025-12-11 for version 1.92.0 (ded5c06cf 2025-12-08)
+info: downloading 7 components
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/user_config.rs:7:
+ use std::str::FromStr;
+ 
+ use thiserror::Error;
+-use toml_edit::{value, DocumentMut, Item, Table};
++use toml_edit::{DocumentMut, Item, Table, value};
+ 
+ #[derive(Debug, Error)]
+ pub enum UserConfigError {
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/user_config.rs:97:
+     if document.get("models").is_none() {
+         document["models"] = Item::Table(Table::new());
+     }
+-    let Some(models) = document
+-        .get_mut("models")
+-        .and_then(Item::as_table_like_mut)
+-    else {
++    let Some(models) = document.get_mut("models").and_then(Item::as_table_like_mut) else {
+         return Err(UserConfigError::ModelsNotTable {
+             path: path.to_path_buf(),
+         });
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/user_config.rs:137:
+             source,
+         })?;
+     }
+-    super::fs_atomic::write_atomically(path, &document.to_string(), Some(0o600)).map_err(
+-        |source| UserConfigError::Write {
++    super::fs_atomic::write_atomically(path, &document.to_string(), Some(0o600)).map_err(|source| {
++        UserConfigError::Write {
+             path: path.to_path_buf(),
+             source,
+-        },
+-    )
++        }
++    })
+ }
+ 
+ #[cfg(test)]
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/paths.rs:331:
+     fn dttn_application_uses_product_binary_name() {
+         let app = dttn_application();
+         let expected = if cfg!(windows) { "dttn.exe" } else { "dttn" };
+-        assert_eq!(app.file_name().and_then(|name| name.to_str()), Some(expected));
++        assert_eq!(
++            app.file_name().and_then(|name| name.to_str()),
++            Some(expected)
++        );
+     }
+ 
+     #[test]
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/user_config.rs:7:
+ use std::str::FromStr;
+ 
+ use thiserror::Error;
+-use toml_edit::{value, DocumentMut, Item, Table};
++use toml_edit::{DocumentMut, Item, Table, value};
+ 
+ #[derive(Debug, Error)]
+ pub enum UserConfigError {
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/user_config.rs:97:
+     if document.get("models").is_none() {
+         document["models"] = Item::Table(Table::new());
+     }
+-    let Some(models) = document
+-        .get_mut("models")
+-        .and_then(Item::as_table_like_mut)
+-    else {
++    let Some(models) = document.get_mut("models").and_then(Item::as_table_like_mut) else {
+         return Err(UserConfigError::ModelsNotTable {
+             path: path.to_path_buf(),
+         });
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/user_config.rs:137:
+             source,
+         })?;
+     }
+-    super::fs_atomic::write_atomically(path, &document.to_string(), Some(0o600)).map_err(
+-        |source| UserConfigError::Write {
++    super::fs_atomic::write_atomically(path, &document.to_string(), Some(0o600)).map_err(|source| {
++        UserConfigError::Write {
+             path: path.to_path_buf(),
+             source,
+-        },
+-    )
++        }
++    })
+ }
+ 
+ #[cfg(test)]
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/config_cmd.rs:35:
+ 
+ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
+     match args.command {
+-        ConfigCommand::Model { model, reset, json } => {
+-            run_model(model.as_deref(), reset, json)
+-        }
++        ConfigCommand::Model { model, reset, json } => run_model(model.as_deref(), reset, json),
+         ConfigCommand::Path { json } => run_path(json),
+     }
+ }
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/config_cmd.rs:97:
+         "unchanged" => println!("No user-level default model override was set."),
+         _ => {}
+     }
+-    println!("User default:      {}", display_model(user_default.as_deref()));
++    println!(
++        "User default:      {}",
++        display_model(user_default.as_deref())
++    );
+     println!(
+         "Effective default: {}",
+         display_model(effective_default.as_deref())
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/config_cmd.rs:35:
+ 
+ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
+     match args.command {
+-        ConfigCommand::Model { model, reset, json } => {
+-            run_model(model.as_deref(), reset, json)
+-        }
++        ConfigCommand::Model { model, reset, json } => run_model(model.as_deref(), reset, json),
+         ConfigCommand::Path { json } => run_path(json),
+     }
+ }
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/config_cmd.rs:97:
+         "unchanged" => println!("No user-level default model override was set."),
+         _ => {}
+     }
+-    println!("User default:      {}", display_model(user_default.as_deref()));
++    println!(
++        "User default:      {}",
++        display_model(user_default.as_deref())
++    );
+     println!(
+         "Effective default: {}",
+         display_model(effective_default.as_deref())
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs:6:
+         .duration_since(UNIX_EPOCH)
+         .unwrap()
+         .as_nanos();
+-    let path = std::env::temp_dir().join(format!(
+-        "dttn-config-cli-{}-{nonce}",
+-        std::process::id()
+-    ));
++    let path = std::env::temp_dir().join(format!("dttn-config-cli-{}-{nonce}", std::process::id()));
+     std::fs::create_dir_all(&path).unwrap();
+     path
+ }
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs:27:
+ fn model_command_updates_and_resets_config_without_starting_agent() {
+     let home = temp_home();
+     let set = run(&home, &["config", "model", "provider/model-v1", "--json"]);
+-    assert!(set.status.success(), "{}", String::from_utf8_lossy(&set.stderr));
++    assert!(
++        set.status.success(),
++        "{}",
++        String::from_utf8_lossy(&set.stderr)
++    );
+     let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+     assert!(config.contains("default = \"provider/model-v1\""));
+ 
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager-bin/tests/config_cli_contract.rs:34:
+     let show = run(&home, &["config", "model", "--json"]);
+-    assert!(show.status.success(), "{}", String::from_utf8_lossy(&show.stderr));
++    assert!(
++        show.status.success(),
++        "{}",
++        String::from_utf8_lossy(&show.stderr)
++    );
+     let payload: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+     assert_eq!(payload["userDefault"], "provider/model-v1");
+     assert_eq!(payload["effectiveDefault"], "provider/model-v1");
+rustfmt_status=1
+=== config check ===
+    Updating crates.io index
+    Updating git repository `https://github.com/helix-editor/nucleo.git`
+ Downloading crates ...
+  Downloaded autocfg v1.5.0
+  Downloaded cfg-if v1.0.4
+  Downloaded bitflags v2.13.0
+  Downloaded arrayref v0.3.9
+  Downloaded arrayvec v0.7.6
+  Downloaded dirs-sys v0.5.0
+  Downloaded equivalent v1.0.2
+  Downloaded cfg_aliases v0.2.1
+  Downloaded urlencoding v2.1.3
+  Downloaded iana-time-zone v0.1.64
+  Downloaded dunce v1.0.5
+  Downloaded tokio-macros v2.7.0
+  Downloaded constant_time_eq v0.3.1
+  Downloaded serde_spanned v1.0.4
+  Downloaded untrusted v0.9.0
+  Downloaded scopeguard v1.2.0
+  Downloaded option-ext v0.2.0
+  Downloaded errno v0.3.14
+  Downloaded itoa v1.0.17
+  Downloaded toml_write v0.1.2
+  Downloaded env_home v0.1.0
+  Downloaded base64 v0.22.1
+  Downloaded toml_writer v1.0.6+spec-1.1.0
+  Downloaded bytes v1.11.1
+  Downloaded toml_datetime v0.7.5+spec-1.1.0
+  Downloaded shellexpand v3.1.2
+  Downloaded quote v1.0.45
+  Downloaded zmij v1.0.19
+  Downloaded thiserror v2.0.18
+  Downloaded proc-macro2 v1.0.106
+  Downloaded lock_api v0.4.14
+  Downloaded cc v1.2.43
+  Downloaded which v8.0.0
+  Downloaded tracing-attributes v0.1.31
+  Downloaded toml_parser v1.0.9+spec-1.1.0
+  Downloaded tracing-core v0.1.36
+  Downloaded unicode-ident v1.0.24
+  Downloaded toml v0.9.12+spec-1.1.0
+  Downloaded num-traits v0.2.19
+  Downloaded toml_edit v0.22.27
+  Downloaded socket2 v0.6.4
+  Downloaded getrandom v0.2.16
+  Downloaded serde v1.0.228
+  Downloaded mio v1.2.1
+  Downloaded serde_json v1.0.149
+  Downloaded memchr v2.8.2
+  Downloaded winnow v0.7.14
+  Downloaded blake3 v1.8.2
+  Downloaded hashbrown v0.16.1
+  Downloaded indexmap v2.12.0
+  Downloaded chrono v0.4.44
+  Downloaded thiserror-impl v2.0.18
+  Downloaded serde_derive v1.0.228
+  Downloaded syn v2.0.117
+  Downloaded serde_core v1.0.228
+  Downloaded nix v0.30.1
+  Downloaded parking_lot v0.12.5
+  Downloaded smallvec v1.15.1
+  Downloaded signal-hook-registry v1.4.6
+  Downloaded rustix v1.1.4
+  Downloaded shlex v1.3.0
+  Downloaded parking_lot_core v0.9.12
+  Downloaded semver v1.0.28
+  Downloaded tracing v0.1.44
+  Downloaded once_cell v1.21.3
+  Downloaded find-msvc-tools v0.1.4
+  Downloaded pin-project-lite v0.2.16
+  Downloaded toml_datetime v0.6.11
+  Downloaded dirs v6.0.0
+  Downloaded libc v0.2.186
+  Downloaded tokio v1.52.3
+  Downloaded ring v0.17.14
+  Downloaded linux-raw-sys v0.12.1
+   Compiling proc-macro2 v1.0.106
+   Compiling libc v0.2.186
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+    Checking cfg-if v1.0.4
+   Compiling find-msvc-tools v0.1.4
+   Compiling shlex v1.3.0
+   Compiling cc v1.2.43
+   Compiling syn v2.0.117
+   Compiling autocfg v1.5.0
+   Compiling parking_lot_core v0.9.12
+   Compiling num-traits v0.2.19
+   Compiling cfg_aliases v0.2.1
+   Compiling zmij v1.0.19
+    Checking scopeguard v1.2.0
+    Checking winnow v0.7.14
+   Compiling serde v1.0.228
+    Checking smallvec v1.15.1
+    Checking bitflags v2.13.0
+    Checking lock_api v0.4.14
+   Compiling nix v0.30.1
+   Compiling serde_json v1.0.149
+    Checking pin-project-lite v0.2.16
+    Checking option-ext v0.2.0
+   Compiling rustix v1.1.4
+    Checking dirs-sys v0.5.0
+    Checking parking_lot v0.12.5
+    Checking toml_datetime v0.7.5+spec-1.1.0
+    Checking serde_spanned v1.0.4
+    Checking toml_parser v1.0.9+spec-1.1.0
+   Compiling blake3 v1.8.2
+   Compiling ring v0.17.14
+    Checking mio v1.2.1
+    Checking signal-hook-registry v1.4.6
+    Checking socket2 v0.6.4
+    Checking hashbrown v0.16.1
+    Checking once_cell v1.21.3
+    Checking toml_writer v1.0.6+spec-1.1.0
+    Checking iana-time-zone v0.1.64
+    Checking memchr v2.8.2
+    Checking bytes v1.11.1
+    Checking linux-raw-sys v0.12.1
+    Checking itoa v1.0.17
+   Compiling thiserror v2.0.18
+   Compiling xai-grok-version v0.2.0-dev (/home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-version)
+    Checking equivalent v1.0.2
+    Checking indexmap v2.12.0
+    Checking toml v0.9.12+spec-1.1.0
+    Checking tracing-core v0.1.36
+   Compiling serde_derive v1.0.228
+   Compiling tokio-macros v2.7.0
+   Compiling tracing-attributes v0.1.31
+    Checking tokio v1.52.3
+   Compiling thiserror-impl v2.0.18
+    Checking chrono v0.4.44
+    Checking dirs v6.0.0
+    Checking getrandom v0.2.16
+    Checking toml_datetime v0.6.11
+    Checking arrayvec v0.7.6
+    Checking untrusted v0.9.0
+    Checking constant_time_eq v0.3.1
+    Checking semver v1.0.28
+    Checking env_home v0.1.0
+    Checking toml_write v0.1.2
+    Checking arrayref v0.3.9
+    Checking toml_edit v0.22.27
+    Checking which v8.0.0
+    Checking prod-mc-cli-chat-proxy-types v0.1.0 (/home/runner/work/DTTN-CLI/DTTN-CLI/prod/mc/cli-chat-proxy-types)
+    Checking shellexpand v3.1.2
+    Checking tracing v0.1.44
+    Checking urlencoding v2.1.3
+    Checking dunce v1.0.5
+    Checking base64 v0.22.1
+    Checking xai-tty-utils v0.1.0 (/home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-tty-utils)
+    Checking xai-grok-config v0.1.0 (/home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config)
+warning: use of deprecated function `paths::default_grok_home`: use default_dttn_home
+  --> crates/codegen/xai-grok-config/src/lib.rs:49:24
+   |
+49 |     default_dttn_home, default_grok_home, dttn_application, dttn_home, encode_cwd_dirname,
+   |                        ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `paths::grok_application`: use dttn_application
+  --> crates/codegen/xai-grok-config/src/lib.rs:50:30
+   |
+50 |     ensure_sessions_cwd_dir, grok_application, grok_home, sessions_cwd_dir, system_config_dir,
+   |                              ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::grok_home`: use dttn_home
+  --> crates/codegen/xai-grok-config/src/lib.rs:50:48
+   |
+50 |     ensure_sessions_cwd_dir, grok_application, grok_home, sessions_cwd_dir, system_config_dir,
+   |                                                ^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/lib.rs:51:21
+   |
+51 |     user_dttn_home, user_grok_home,
+   |                     ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+ --> crates/codegen/xai-grok-config/src/loader.rs:8:39
+  |
+8 | use crate::paths::{system_config_dir, user_grok_home};
+  |                                       ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/loader.rs:84:28
+   |
+84 |     load_user_config_layer(user_grok_home().as_deref(), "config.toml")
+   |                            ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/loader.rs:91:28
+   |
+91 |     load_user_config_layer(user_grok_home().as_deref(), MANAGED_CONFIG_FILENAME)
+   |                            ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+   --> crates/codegen/xai-grok-config/src/loader.rs:128:62
+    |
+128 |     managed_config_layers_at(system_config_dir().as_deref(), user_grok_home().as_deref())
+    |                                                              ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+   --> crates/codegen/xai-grok-config/src/loader.rs:387:29
+    |
+387 |     let Some(home) = crate::user_grok_home() else {
+    |                             ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/managed_cache.rs:11:19
+   |
+11 | use crate::paths::user_grok_home;
+   |                   ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/managed_cache.rs:50:29
+   |
+50 |     managed_config_stale_at(user_grok_home().as_deref(), identity)
+   |                             ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/managed_cache.rs:65:25
+   |
+65 |     if let Some(home) = user_grok_home() {
+   |                         ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/managed_cache.rs:76:30
+   |
+76 |     managed_deployment_id_at(user_grok_home()?.as_path(), key_fingerprint)
+   |                              ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+   --> crates/codegen/xai-grok-config/src/managed_cache.rs:158:5
+    |
+158 |     user_grok_home().is_some_and(|home| {
+    |     ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+   --> crates/codegen/xai-grok-config/src/managed_cache.rs:251:11
+    |
+251 |     match user_grok_home() {
+    |           ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+   --> crates/codegen/xai-grok-config/src/managed_cache.rs:302:5
+    |
+302 |     user_grok_home().is_some_and(|home| managed_policy_compromised_for_at(&home, identity))
+    |     ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+ --> crates/codegen/xai-grok-config/src/validation.rs:7:39
+  |
+7 | use crate::paths::{system_config_dir, user_grok_home};
+  |                                       ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+  --> crates/codegen/xai-grok-config/src/validation.rs:66:30
+   |
+66 |     if let Some(user_path) = user_grok_home().map(|g| g.join("requirements.toml"))
+   |                              ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+   --> crates/codegen/xai-grok-config/src/validation.rs:110:28
+    |
+110 |     load_user_requirements(user_grok_home().as_deref())
+    |                            ^^^^^^^^^^^^^^
+
+warning: use of deprecated function `paths::user_grok_home`: use user_dttn_home
+   --> crates/codegen/xai-grok-config/src/validation.rs:219:32
+    |
+219 |     validate_user_requirements(user_grok_home().as_deref())?;
+    |                                ^^^^^^^^^^^^^^
+
+warning: `xai-grok-config` (lib) generated 20 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.18s
+config_check_status=0
