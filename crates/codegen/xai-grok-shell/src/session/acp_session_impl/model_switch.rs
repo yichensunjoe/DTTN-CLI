@@ -17,11 +17,15 @@ impl SessionActor {
                     .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
             })
         });
-        crate::session::session_model_snapshot::persist_explicit_model_switch(
+        let frozen_model = crate::session::session_model_snapshot::persist_explicit_model_switch(
             &self.session_info,
             &sampling_config,
             new_context_window.get(),
         );
+        self.status_runtime.update(|status| {
+            status.model =
+                crate::session::status_runtime_snapshot::StatusModelContract::from(&frozen_model);
+        });
         let prev_threshold = self.compaction.threshold_percent.get();
         if prev_threshold != auto_compact_threshold_percent {
             tracing::info!(
