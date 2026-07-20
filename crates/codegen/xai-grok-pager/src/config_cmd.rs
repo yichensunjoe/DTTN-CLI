@@ -1,14 +1,12 @@
 //! Offline user configuration commands.
 
-use std::path::PathBuf;
-
 use anyhow::Context as _;
 use clap::{Args, Subcommand};
 
 #[derive(Debug, Clone, Args)]
 pub struct ConfigArgs {
     #[command(subcommand)]
-    pub command: ConfigCommand,
+    pub command: Option<ConfigCommand>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -35,8 +33,11 @@ pub enum ConfigCommand {
 
 pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
     match args.command {
-        ConfigCommand::Model { model, reset, json } => run_model(model.as_deref(), reset, json),
-        ConfigCommand::Path { json } => run_path(json),
+        Some(ConfigCommand::Model { model, reset, json }) => {
+            run_model(model.as_deref(), reset, json)
+        }
+        Some(ConfigCommand::Path { json }) => run_path(json),
+        None => run_model(None, false, false),
     }
 }
 
@@ -123,9 +124,4 @@ fn effective_default_model() -> anyhow::Result<Option<String>> {
 
 fn display_model(model: Option<&str>) -> &str {
     model.unwrap_or("<automatic>")
-}
-
-#[allow(dead_code)]
-fn _path_type_check(path: PathBuf) -> PathBuf {
-    path
 }
