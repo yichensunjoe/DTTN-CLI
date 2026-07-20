@@ -91,7 +91,7 @@ mod cli_catchall_drop_tests {
 pub(crate) async fn spawn_session_actor(
     session_info: SessionInfo,
     gateway: GatewaySender,
-    sampling_config: SamplingConfig,
+    mut sampling_config: SamplingConfig,
     credentials: xai_chat_state::Credentials,
     auth_method_id: crate::agent::auth_method::SharedAuthMethodId,
     auth_manager: Option<Arc<AuthManager>>,
@@ -208,6 +208,54 @@ pub(crate) async fn spawn_session_actor(
             "max_turns must be greater than 0".to_string(),
         ));
     }
+    let requested_context_window_override = std::env::var("GROK_DEBUG_CONTEXT_WINDOW")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(std::num::NonZeroU64::new);
+    let configured_context_window = std::num::NonZeroU64::new(sampling_config.context_window)
+        .unwrap_or_else(|| {
+            std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
+                .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
+        });
+    let requested_context_window = requested_context_window_override
+        .unwrap_or(configured_context_window)
+        .get();
+    let snapshot_resolution =
+        crate::session::session_model_snapshot::resolve_or_create_session_snapshot(
+            &session_info,
+            &sampling_config,
+            requested_context_window,
+        );
+    crate::session::session_model_snapshot::apply_snapshot_to_sampler_config(
+        &mut sampling_config,
+        &snapshot_resolution.snapshot,
+    );
+    let context_window_override = match snapshot_resolution.kind {
+        crate::session::session_model_snapshot::SnapshotResolutionKind::Created => {
+            requested_context_window_override
+        }
+        crate::session::session_model_snapshot::SnapshotResolutionKind::Restored => {
+            if let Some(requested) = requested_context_window_override
+                && requested.get() != snapshot_resolution.snapshot.context_window
+            {
+                tracing::warn!(
+                    requested_context_window = requested.get(),
+                    frozen_context_window = snapshot_resolution.snapshot.context_window,
+                    "ignoring debug context override for restored session"
+                );
+            }
+            None
+        }
+    };
+    tracing::info!(
+        session_id = %session_info.id.0,
+        model = %snapshot_resolution.snapshot.model_id,
+        context_window = snapshot_resolution.snapshot.context_window,
+        max_completion_tokens = ?snapshot_resolution.snapshot.max_completion_tokens,
+        snapshot_state = ?snapshot_resolution.kind,
+        catalog_stale = snapshot_resolution.snapshot.catalog_stale,
+        "session model contract frozen"
+    );
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     tracing::info!(
         "Session '{}' created with {} MCP servers",
@@ -385,22 +433,11 @@ pub(crate) async fn spawn_session_actor(
         },
         |mc| mc.pruning.clone(),
     );
-    let context_window_override = std::env::var("GROK_DEBUG_CONTEXT_WINDOW")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .and_then(std::num::NonZeroU64::new);
     let baseline_context_window = std::num::NonZeroU64::new(sampling_config.context_window)
         .unwrap_or_else(|| {
             std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
                 .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
         });
-    if let Some(cw) = context_window_override {
-        tracing::warn!(
-            override_context_window = cw.get(),
-            original_context_window = baseline_context_window.get(),
-            "GROK_DEBUG_CONTEXT_WINDOW override active"
-        );
-    }
     let chat_state_sampling_config = xai_grok_sampling_types::SamplingConfig {
         base_url: sampling_config.base_url.clone(),
         model: sampling_config.model.clone(),
@@ -410,7 +447,7 @@ pub(crate) async fn spawn_session_actor(
         api_backend: sampling_config.api_backend.clone(),
         provider_extensions: sampling_config.provider_extensions,
         extra_headers: sampling_config.extra_headers.clone(),
-        context_window: context_window_override.unwrap_or(baseline_context_window),
+        context_window: baseline_context_window,
         reasoning_effort: sampling_config.reasoning_effort,
         stream_tool_calls: Some(sampling_config.stream_tool_calls),
     };
@@ -785,9 +822,7 @@ pub(crate) async fn spawn_session_actor(
         );
         None
     };
-    let context_window_tokens = context_window_override
-        .map(|c| c.get())
-        .unwrap_or(sampling_config.context_window);
+    let context_window_tokens = sampling_config.context_window;
     let managed_gateway_tool_client = auth_manager.as_ref().map(|am| {
         xai_grok_tools::types::resources::ManagedGatewayToolClient(Arc::new(
             ShellManagedGatewayToolClient {

@@ -3,13 +3,6 @@
 //! refresh.
 use super::*;
 impl SessionActor {
-    /// `true` for session-based ACP auth methods.
-    fn is_session_based_auth(&self) -> bool {
-        self.auth_method_id
-            .load()
-            .as_deref()
-            .is_some_and(crate::agent::auth_method::is_session_based_method)
-    }
     pub(super) fn to_acp_error(&self, err: SamplingError) -> acp::Error {
         if err.is_auth_error() {
             let method_guard = self.auth_method_id.load();
@@ -310,9 +303,6 @@ impl SessionActor {
         }
         self.persist_announcement_state().await;
     }
-    /// Idle threshold for proactive model metadata refresh on session resume.
-    /// If the session has been idle longer than this, we fetch fresh model config
-    /// from cli-chat-proxy before the next API request to catch context_window changes.
     pub(super) const IDLE_REFRESH_THRESHOLD_SECS: i64 = 600;
     /// Record the current time as the last API request timestamp.
     pub(super) fn record_api_request_time(&self) {
@@ -320,138 +310,23 @@ impl SessionActor {
         self.last_api_request_at
             .store(now_ms, std::sync::atomic::Ordering::Relaxed);
     }
-    /// Check if the session has been idle and proactively refresh model metadata.
-    ///
-    /// Called at the start of each turn. If idle > `IDLE_REFRESH_THRESHOLD_SECS`,
-    /// fetches `/models-v2` from cli-chat-proxy and updates the cached
-    /// context_window / max_completion_tokens if remote settings changed them.
-    ///
-    /// Skipped for BYOK users (no remote settings, no `/models-v2`).
+    /// Current sessions keep their frozen model contract. Idle detection is
+    /// retained only as an observability signal; catalog refreshes are consumed
+    /// by new sessions or an explicit model switch.
     pub(super) async fn maybe_refresh_model_metadata_on_resume(&self) {
-        if !self.is_session_based_auth() {
-            return;
-        }
         let last_request_ms = self
             .last_api_request_at
             .load(std::sync::atomic::Ordering::Relaxed);
         if last_request_ms == 0 {
             return;
         }
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let idle_secs = (now_ms - last_request_ms) / 1000;
-        if idle_secs < Self::IDLE_REFRESH_THRESHOLD_SECS {
-            return;
-        }
-        let Some(current_config) = self.chat_state_handle.get_sampling_config().await else {
-            return;
-        };
-        let current_model = &current_config.model;
-        let base_url = &current_config.base_url;
-        if !crate::util::is_cli_chat_proxy_url(base_url) {
-            return;
-        }
-        tracing::info!(
-            idle_secs,
-            threshold_secs = Self::IDLE_REFRESH_THRESHOLD_SECS,
-            "Session resumed after idle — refreshing model metadata from cli-chat-proxy"
-        );
-        let creds = self.chat_state_handle.get_credentials().await;
-        let Some(ref am) = self.auth_manager else {
-            tracing::debug!("No auth manager available for model metadata refresh");
-            return;
-        };
-        let _ = am.auth().await;
-        let provider: Arc<dyn xai_grok_auth::AuthCredentialProvider> = Arc::new(
-            crate::auth::credential_provider::ShellAuthCredentialProvider::new(
-                am.clone(),
-                None,
-                None,
-            ),
-        );
-        let middleware_client =
-            crate::http::with_auth_retry(crate::http::shared_client(), provider);
-        let url = format!("{}/models-v2", base_url);
-        let parse_models_response =
-            |json: serde_json::Value| -> Option<(std::num::NonZeroU64, Option<u32>)> {
-                let data = json.get("data")?.as_array()?;
-                for entry in data {
-                    let parsed = crate::remote::client::parse_remote_model_value(entry, base_url)?;
-                    if parsed.model == *current_model {
-                        return Some((parsed.context_window, parsed.max_completion_tokens));
-                    }
-                }
-                None
-            };
-        #[allow(unused_mut)]
-        let mut request = middleware_client
-            .get(&url)
-            .header("X-XAI-Token-Auth", "xai-grok-cli")
-            .header("x-grok-client-version", xai_grok_version::VERSION)
-            .header(
-                crate::http::CLIENT_MODE_HEADER,
-                crate::http::process_client_mode(),
-            )
-            .timeout(std::time::Duration::from_secs(5));
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = % e, "Failed to fetch models for idle refresh");
-                return;
-            }
-        };
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            crate::auth::attribution::record_consumer_401(
-                am,
-                None,
-                crate::auth::attribution::ConsumerKind::IdleResumeModelRefresh,
-                "",
-                creds.api_key.as_deref(),
+        let idle_secs = (chrono::Utc::now().timestamp_millis() - last_request_ms) / 1000;
+        if idle_secs >= Self::IDLE_REFRESH_THRESHOLD_SECS {
+            tracing::debug!(
+                session_id = %self.session_info.id.0,
+                idle_secs,
+                "session model metadata is frozen; idle refresh deferred to future sessions"
             );
-        }
-        let result = if !response.status().is_success() {
-            tracing::warn!(
-                status = response.status().as_u16(),
-                "Failed to fetch models for idle refresh"
-            );
-            None
-        } else {
-            response
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(parse_models_response)
-        };
-        let Some((new_context_window, new_max_completion_tokens)) = result else {
-            tracing::debug!("Model metadata refresh: no update or fetch failed");
-            return;
-        };
-        let mut config_changed = false;
-        let mut updated_config = current_config.clone();
-        if current_config.context_window != new_context_window
-            && self.compaction.context_window_override.is_none()
-        {
-            tracing::info!(
-                old_context_window = current_config.context_window.get(),
-                new_context_window = new_context_window.get(),
-                "Context window updated on session resume"
-            );
-            updated_config.context_window = new_context_window;
-            config_changed = true;
-        }
-        if let Some(new_mct) = new_max_completion_tokens
-            && current_config.max_completion_tokens != Some(new_mct)
-        {
-            tracing::info!(
-                old_max_completion_tokens = current_config.max_completion_tokens,
-                new_max_completion_tokens = new_mct,
-                "Max completion tokens updated on session resume"
-            );
-            updated_config.max_completion_tokens = Some(new_mct);
-            config_changed = true;
-        }
-        if config_changed {
-            self.chat_state_handle
-                .update_sampling_config(updated_config);
         }
     }
     /// Update cached sampling config if model metadata changed (from response headers).
@@ -462,54 +337,26 @@ impl SessionActor {
         if let Some(ref etag) = metadata.models_etag {
             self.models_manager.refresh_if_new_etag(etag.clone()).await;
         }
-        let current_config = match self.chat_state_handle.get_sampling_config().await {
-            Some(cfg) => cfg,
-            None => return,
-        };
-        let mut config_changed = false;
-        let mut new_context_window = current_config.context_window;
-        let mut new_max_completion_tokens = current_config.max_completion_tokens;
-        if let Some(new_cw) = metadata.context_window.and_then(std::num::NonZeroU64::new)
-            && current_config.context_window != new_cw
-            && self.compaction.context_window_override.is_none()
-        {
-            if new_cw < current_config.context_window {
-                tracing::warn!(
-                    current_context_window = current_config.context_window.get(),
-                    header_context_window = new_cw.get(),
-                    "Ignoring context_window downgrade from response header"
-                );
-            } else {
-                tracing::info!(
-                    old_context_window = current_config.context_window.get(),
-                    new_context_window = new_cw.get(),
-                    "Model context_window upgraded via response header"
-                );
-                new_context_window = new_cw;
-                config_changed = true;
-            }
-        }
-        if let Some(new_mct) = metadata.max_completion_tokens
-            && current_config.max_completion_tokens != Some(new_mct)
-        {
-            tracing::info!(
-                old_max_completion_tokens = current_config.max_completion_tokens,
-                new_max_completion_tokens = new_mct,
-                "Model max_completion_tokens changed via response header"
-            );
-            new_max_completion_tokens = Some(new_mct);
-            config_changed = true;
-        }
-        if !config_changed {
+        let Some(current_config) = self.chat_state_handle.get_sampling_config().await else {
             return;
-        }
-        let updated_config = xai_grok_sampling_types::SamplingConfig {
-            context_window: new_context_window,
-            max_completion_tokens: new_max_completion_tokens,
-            ..current_config
         };
-        self.chat_state_handle
-            .update_sampling_config(updated_config);
+        let context_changed = metadata
+            .context_window
+            .is_some_and(|value| value != current_config.context_window.get());
+        let output_changed = metadata
+            .max_completion_tokens
+            .is_some_and(|value| Some(value) != current_config.max_completion_tokens);
+        if context_changed || output_changed {
+            tracing::info!(
+                session_id = %self.session_info.id.0,
+                model = %current_config.model,
+                frozen_context_window = current_config.context_window.get(),
+                observed_context_window = ?metadata.context_window,
+                frozen_max_completion_tokens = ?current_config.max_completion_tokens,
+                observed_max_completion_tokens = ?metadata.max_completion_tokens,
+                "provider metadata changed; current session remains frozen"
+            );
+        }
     }
     /// Inject the actor's managed Read-deny globs into the current ToolBridge so
     /// the Grep tool excludes policy-forbidden paths. No-op when empty. Called on
