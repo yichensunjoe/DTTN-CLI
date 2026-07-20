@@ -18,6 +18,36 @@ fn renderer_reads_complete_immutable_generations_without_async_work() {
 }
 
 #[test]
+fn concurrent_event_publishers_preserve_every_update() {
+    const WRITERS: usize = 6;
+    const UPDATES_PER_WRITER: usize = 200;
+
+    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+    let writers = (0..WRITERS)
+        .map(|_| {
+            let publisher = publisher.clone();
+            std::thread::spawn(move || {
+                for _ in 0..UPDATES_PER_WRITER {
+                    publisher.update(|snapshot| {
+                        snapshot.tokens.session_output =
+                            snapshot.tokens.session_output.saturating_add(1);
+                    });
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for writer in writers {
+        writer.join().expect("status runtime writer panicked");
+    }
+
+    let snapshot = publisher.snapshot();
+    let expected = (WRITERS * UPDATES_PER_WRITER) as u64;
+    assert_eq!(snapshot.tokens.session_output, expected);
+    assert_eq!(snapshot.revision, expected);
+}
+
+#[test]
 fn context_utilization_is_saturating_and_unknown_safe() {
     let usage = StatusTokenUsage {
         session_input: 90,
