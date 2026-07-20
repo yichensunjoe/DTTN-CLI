@@ -154,7 +154,10 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
             provider.auth_env.join(", ")
         };
         println!("  {:<14} {}", provider.id, provider.name);
-        println!("  {:<14} API: {}; auth: {}", "", provider.api_style, auth);
+        println!(
+            "  {:<14} API: {}; auth: {}",
+            "", provider.api_style, auth
+        );
     }
     println!();
     println!("Model references use `provider/model`.");
@@ -162,7 +165,9 @@ fn list_model_providers(json: bool) -> anyhow::Result<()> {
     println!(
         "  dttn config models custom <PROVIDER> <MODEL> --base-url <URL> --api-key-env <ENV_VAR> --context-window <TOKENS>"
     );
-    println!("Add `--set-default` only when the new model should become the default for new sessions.");
+    println!(
+        "Add `--set-default` only when the new model should become the default for new sessions."
+    );
     println!(
         "Provider-native Gemini and Ollama protocols are listed for discovery but are not configured by the custom OpenAI-compatible command."
     );
