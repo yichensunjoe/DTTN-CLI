@@ -406,6 +406,7 @@ impl SessionActor {
         let workspace_ops = self.workspace_ops.clone();
         let pending_interjections = self.pending_interjections.clone();
         let session_id: Arc<str> = Arc::from(&*self.session_info.id.0);
+        self.status_runtime.queue_tools(approved.len());
         let dispatch_futures: Vec<_> = approved
             .iter()
             .enumerate()
@@ -417,11 +418,13 @@ impl SessionActor {
                 let session_id = session_id.clone();
                 let pending_interjections = pending_interjections.clone();
                 let blocking_wait_depth = self.tool_context.blocking_wait_depth.clone();
+                let status_runtime = self.status_runtime.clone();
                 let interruptible =
                     is_interruptible_wait_tool(&prepared.tool_name, &prepared.parsed_args);
                 let lock = lock_path_for_args(&prepared.parsed_args)
                     .and_then(|fp| file_locks.get(fp).cloned());
                 async move {
+                    let status_tool = status_runtime.begin_tool(prepared.tool_name.clone());
                     let exec_start = std::time::Instant::now();
                     let run_tool = || {
                         let prepared = Arc::clone(&prepared);
@@ -460,12 +463,14 @@ impl SessionActor {
                         Ok(tool_result) => !tool_result.output.is_error(),
                         Err(_) => false,
                     };
+                    let execution_duration_ms = exec_start.elapsed().as_millis() as u64;
+                    status_tool.finish();
                     xai_grok_telemetry::unified_log::info(
                         "shell.tool.exec_done",
                         Some(session_id.as_ref()),
                         Some(serde_json::json!(
                             { "tool_name" : prepared.tool_name.as_str(), "elapsed_ms" :
-                            exec_start.elapsed().as_millis() as u64, "success" :
+                            execution_duration_ms, "success" :
                             success, }
                         )),
                     );

@@ -4,6 +4,7 @@
 //! clone an `Arc` and never perform network, filesystem, Git, or async work.
 
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use super::session_model_snapshot::ResolvedSessionModelSnapshot;
 
@@ -217,6 +218,50 @@ pub struct StatusRuntimePublisher {
     inner: Arc<StatusRuntimeInner>,
 }
 
+/// Prompt-owned RAII guard for one concurrently executing tool.
+/// Cancellation and task aborts drop the guard, so active counts cannot
+/// remain stuck. A guard from an older prompt is ignored after a new
+/// prompt owns the snapshot.
+#[must_use]
+pub struct StatusToolGuard {
+    publisher: StatusRuntimePublisher,
+    prompt_id: Option<String>,
+    tool_name: String,
+    started_at: Instant,
+    finished: bool,
+}
+
+impl StatusToolGuard {
+    pub fn finish(mut self) {
+        self.publish_finished();
+        self.finished = true;
+    }
+
+    fn publish_finished(&self) {
+        let Some(prompt_id) = self.prompt_id.as_deref() else {
+            return;
+        };
+        let duration_ms = self.started_at.elapsed().as_millis() as u64;
+        self.publisher.update_if(|snapshot| {
+            if snapshot.active_prompt_id.as_deref() != Some(prompt_id) {
+                return false;
+            }
+            snapshot.tools.active_count = snapshot.tools.active_count.saturating_sub(1);
+            snapshot.tools.last_tool_name = Some(self.tool_name.clone());
+            snapshot.latency.last_tool_ms = Some(duration_ms);
+            true
+        });
+    }
+}
+
+impl Drop for StatusToolGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.publish_finished();
+        }
+    }
+}
+
 impl StatusRuntimePublisher {
     pub fn new(initial: StatusRuntimeSnapshot) -> Self {
         Self {
@@ -294,6 +339,7 @@ impl StatusRuntimePublisher {
             snapshot.latency.time_to_first_token_ms = None;
             snapshot.latency.last_tool_ms = None;
             snapshot.tools.active_count = 0;
+            snapshot.tools.queued_count = 0;
             snapshot.tools.last_tool_name = None;
         })
     }
@@ -332,6 +378,41 @@ impl StatusRuntimePublisher {
         })
     }
 
+    /// Replace the number of approved tool calls waiting to be polled.
+    pub fn queue_tools(&self, count: usize) -> Option<Arc<StatusRuntimeSnapshot>> {
+        let count = u32::try_from(count).unwrap_or(u32::MAX);
+        self.update_if(|snapshot| {
+            if snapshot.active_prompt_id.is_none() || snapshot.tools.queued_count == count {
+                return false;
+            }
+            snapshot.tools.queued_count = count;
+            true
+        })
+    }
+
+    /// Start one real dispatch future and return an abort-safe guard.
+    pub fn begin_tool(&self, tool_name: impl Into<String>) -> StatusToolGuard {
+        let tool_name = tool_name.into();
+        let mut prompt_id = None;
+        self.update_if(|snapshot| {
+            let Some(active_prompt_id) = snapshot.active_prompt_id.as_ref() else {
+                return false;
+            };
+            prompt_id = Some(active_prompt_id.clone());
+            snapshot.tools.queued_count = snapshot.tools.queued_count.saturating_sub(1);
+            snapshot.tools.active_count = snapshot.tools.active_count.saturating_add(1);
+            snapshot.tools.last_tool_name = Some(tool_name.clone());
+            true
+        });
+        StatusToolGuard {
+            publisher: self.clone(),
+            prompt_id,
+            tool_name,
+            started_at: Instant::now(),
+            finished: false,
+        }
+    }
+
     /// Mark cancellation only when the event still owns the active prompt.
     pub fn mark_cancelling(&self, prompt_id: &str) -> Option<Arc<StatusRuntimeSnapshot>> {
         self.update_if(|snapshot| {
@@ -339,6 +420,7 @@ impl StatusRuntimePublisher {
                 return false;
             }
             snapshot.run_state = StatusRunState::Cancelling;
+            snapshot.tools.queued_count = 0;
             true
         })
     }
@@ -361,6 +443,7 @@ impl StatusRuntimePublisher {
             snapshot.active_prompt_id = None;
             snapshot.run_state = run_state;
             snapshot.tools.active_count = 0;
+            snapshot.tools.queued_count = 0;
             true
         })
     }
@@ -558,6 +641,45 @@ mod tests {
         assert_eq!(published.tokens.session_cached_input, 250);
         assert_eq!(published.tokens.turn_input, 100);
         assert_eq!(published.tokens.turn_output, 50);
+    }
+
+    #[test]
+    fn tool_guards_track_parallel_activity_and_latency() {
+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+        publisher.begin_turn("turn-a");
+        assert!(publisher.queue_tools(2).is_some());
+
+        let first = publisher.begin_tool("bash");
+        let second = publisher.begin_tool("read_file");
+        let active = publisher.snapshot();
+        assert_eq!(active.tools.queued_count, 0);
+        assert_eq!(active.tools.active_count, 2);
+
+        first.finish();
+        assert_eq!(publisher.snapshot().tools.active_count, 1);
+        drop(second);
+        let done = publisher.snapshot();
+        assert_eq!(done.tools.active_count, 0);
+        assert_eq!(done.tools.last_tool_name.as_deref(), Some("read_file"));
+        assert!(done.latency.last_tool_ms.is_some());
+    }
+
+    #[test]
+    fn stale_tool_guard_cannot_overwrite_a_new_turn() {
+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+        publisher.begin_turn("turn-a");
+        publisher.queue_tools(1);
+        let stale = publisher.begin_tool("bash");
+        publisher.begin_turn("turn-b");
+        let revision = publisher.snapshot().revision;
+        drop(stale);
+
+        let current = publisher.snapshot();
+        assert_eq!(current.revision, revision);
+        assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
+        assert_eq!(current.tools.active_count, 0);
+        assert_eq!(current.tools.queued_count, 0);
+        assert_eq!(current.tools.last_tool_name, None);
     }
 
     #[test]
