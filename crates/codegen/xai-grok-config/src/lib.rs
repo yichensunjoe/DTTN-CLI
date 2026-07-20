@@ -21,6 +21,7 @@ mod managed_cache;
 mod paths;
 pub mod shell;
 pub mod signed_policy;
+pub mod user_config;
 mod validation;
 pub mod version_overrides;
 
