@@ -1,0 +1,137 @@
+name: DTTN Publish Validated Pager Product Once
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dttn-publish-validated-pager-product-once.yml'
+
+concurrency:
+  group: dttn-publish-validated-pager-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Restore previously validated patch layers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_PATCH_BLOB_SHA: e8785ae4e760ba71ffe5babdc48116423138e5ce
+          FIX_PATCH_BLOB_SHA: b0a1aa4e7d3abbf7c683cfebd2fb9d4e323d70a0
+        run: |
+          set -euo pipefail
+          restore_blob() {
+            local blob_sha=$1
+            local output=$2
+            gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${blob_sha}" --jq .content \
+              | tr -d '\n' \
+              | base64 --decode > "${output}.gz"
+            gunzip --stdout "${output}.gz" > "$output"
+          }
+          restore_blob "$BASE_PATCH_BLOB_SHA" /tmp/pager-base.patch
+          restore_blob "$FIX_PATCH_BLOB_SHA" /tmp/pager-fix.patch
+          echo '59ab2910ebb094f7f336614445f9a9ff78450398032c51160a015fe12362ba21  /tmp/pager-base.patch' \
+            | sha256sum --check --strict
+          echo 'ec057031a2c0b8d1465ab5380381542ee630753f1be9a2697582fd88d5b557fc  /tmp/pager-fix.patch' \
+            | sha256sum --check --strict
+
+      - name: Reconstruct validated product tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check /tmp/pager-base.patch
+          git apply /tmp/pager-base.patch
+          git apply --check /tmp/pager-fix.patch
+          git apply /tmp/pager-fix.patch
+          mapfile -t changed_rust < <(git diff --name-only --diff-filter=ACM -- '*.rs')
+          rustfmt --edition 2024 --config skip_children=true "${changed_rust[@]}"
+          rustfmt --edition 2024 --config skip_children=true --check "${changed_rust[@]}"
+          git diff --check
+
+      - name: Verify exact validated scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-files <<'EOF'
+          .github/workflows/dttn-phase-6-status-runtime.yml
+          crates/codegen/xai-grok-pager/src/app/acp_handler/mod.rs
+          crates/codegen/xai-grok-pager/src/app/acp_handler/tests/mod.rs
+          crates/codegen/xai-grok-pager/src/app/acp_handler/tests/status_runtime.rs
+          crates/codegen/xai-grok-pager/src/app/actions.rs
+          crates/codegen/xai-grok-pager/src/app/agent_view/mod.rs
+          crates/codegen/xai-grok-pager/src/app/agent_view/render.rs
+          crates/codegen/xai-grok-pager/src/app/agent_view/session.rs
+          crates/codegen/xai-grok-pager/src/app/dispatch/status.rs
+          crates/codegen/xai-grok-pager/src/app/dispatch/task_result.rs
+          crates/codegen/xai-grok-pager/src/app/dispatch/tests/task_result.rs
+          crates/codegen/xai-grok-pager/src/app/effects/mod.rs
+          crates/codegen/xai-grok-pager/src/app/effects/tests.rs
+          crates/codegen/xai-grok-pager/src/views/mod.rs
+          crates/codegen/xai-grok-pager/src/views/status_runtime.rs
+          crates/codegen/xai-grok-pager/tests/status_runtime_contract.rs
+          EOF
+          sed -i 's/^          //' /tmp/expected-files
+          git diff --name-only | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+      - name: Commit validated product files
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            crates/codegen/xai-grok-pager/src/app/acp_handler/mod.rs \
+            crates/codegen/xai-grok-pager/src/app/acp_handler/tests/mod.rs \
+            crates/codegen/xai-grok-pager/src/app/acp_handler/tests/status_runtime.rs \
+            crates/codegen/xai-grok-pager/src/app/actions.rs \
+            crates/codegen/xai-grok-pager/src/app/agent_view/mod.rs \
+            crates/codegen/xai-grok-pager/src/app/agent_view/render.rs \
+            crates/codegen/xai-grok-pager/src/app/agent_view/session.rs \
+            crates/codegen/xai-grok-pager/src/app/dispatch/status.rs \
+            crates/codegen/xai-grok-pager/src/app/dispatch/task_result.rs \
+            crates/codegen/xai-grok-pager/src/app/dispatch/tests/task_result.rs \
+            crates/codegen/xai-grok-pager/src/app/effects/mod.rs \
+            crates/codegen/xai-grok-pager/src/app/effects/tests.rs \
+            crates/codegen/xai-grok-pager/src/views/mod.rs \
+            crates/codegen/xai-grok-pager/src/views/status_runtime.rs \
+            crates/codegen/xai-grok-pager/tests/status_runtime_contract.rs
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'feat: connect Pager status runtime and status line'
+          git push origin "HEAD:${HEAD_BRANCH}"
+
+      - name: Remove one-time workflow
+        if: always()
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$HEAD_BRANCH"
+          git reset --hard "origin/$HEAD_BRANCH"
+          git rm -f --ignore-unmatch .github/workflows/dttn-publish-validated-pager-product-once.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git diff --cached --check
+          git commit -m 'chore: remove validated Pager product publisher'
+          git push origin "HEAD:${HEAD_BRANCH}"
