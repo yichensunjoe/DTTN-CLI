@@ -332,95 +332,94 @@ diff -ruN orig/crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot
      /// Replace the number of approved tool calls waiting to be polled.
      pub fn queue_tools(&self, count: usize) -> Option<Arc<StatusRuntimeSnapshot>> {
          let count = u32::try_from(count).unwrap_or(u32::MAX);
-@@ -682,6 +865,91 @@
-         assert_eq!(current.tools.last_tool_name, None);
-     }
- 
-+    #[test]
-+    fn sampler_latency_is_prompt_owned_and_replaces_last_request() {
-+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
-+        publisher.begin_turn("turn-a");
-+        let first = publisher
-+            .publish_request_latency("turn-a", 120, Some(35))
-+            .expect("active prompt accepts latency");
-+        assert_eq!(first.latency.last_request_ms, Some(120));
-+        assert_eq!(first.latency.time_to_first_token_ms, Some(35));
+--- a/crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
++++ b/crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+@@ -143,3 +143,88 @@
+     assert_eq!(usage.context_percent(240), Some(50));
+     assert_eq!(usage.context_percent(100), Some(100));
+ }
 +
-+        let revision = first.revision;
-+        publisher.begin_turn("turn-b");
-+        assert!(
-+            publisher
-+                .publish_request_latency("turn-a", 999, Some(998))
-+                .is_none()
-+        );
-+        let current = publisher.snapshot();
-+        assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
-+        assert_eq!(current.latency.last_request_ms, None);
-+        assert!(current.revision > revision);
++#[test]
++fn sampler_latency_is_prompt_owned_and_replaces_last_request() {
++    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
++    publisher.begin_turn("turn-a");
++    let first = publisher
++        .publish_request_latency("turn-a", 120, Some(35))
++        .expect("active prompt accepts latency");
++    assert_eq!(first.latency.last_request_ms, Some(120));
++    assert_eq!(first.latency.time_to_first_token_ms, Some(35));
 +
-+        let latest = publisher
-+            .publish_request_latency("turn-b", 80, None)
-+            .expect("current prompt accepts latency");
-+        assert_eq!(latest.latency.last_request_ms, Some(80));
-+        assert_eq!(latest.latency.time_to_first_token_ms, None);
-+    }
++    let revision = first.revision;
++    publisher.begin_turn("turn-b");
++    assert!(
++        publisher
++            .publish_request_latency("turn-a", 999, Some(998))
++            .is_none()
++    );
++    let current = publisher.snapshot();
++    assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
++    assert_eq!(current.latency.last_request_ms, None);
++    assert!(current.revision > revision);
 +
-+    #[test]
-+    fn backend_tool_events_are_idempotent_and_request_scoped() {
-+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
-+        publisher.begin_turn("turn-a");
-+        assert!(
-+            publisher
-+                .begin_backend_tool("request-1", "call-1", "web_search")
-+                .is_some()
-+        );
-+        assert!(
-+            publisher
-+                .begin_backend_tool("request-1", "call-1", "web_search")
-+                .is_none()
-+        );
-+        assert!(
-+            publisher
-+                .begin_backend_tool("request-1", "call-2", "x_search")
-+                .is_some()
-+        );
-+        assert_eq!(publisher.snapshot().tools.active_count, 2);
++    let latest = publisher
++        .publish_request_latency("turn-b", 80, None)
++        .expect("current prompt accepts latency");
++    assert_eq!(latest.latency.last_request_ms, Some(80));
++    assert_eq!(latest.latency.time_to_first_token_ms, None);
++}
 +
-+        assert!(
-+            publisher
-+                .finish_backend_tool("request-1", "call-1")
-+                .is_some()
-+        );
-+        assert!(
-+            publisher
-+                .finish_backend_tool("request-1", "call-1")
-+                .is_none()
-+        );
-+        assert_eq!(publisher.snapshot().tools.active_count, 1);
++#[test]
++fn backend_tool_events_are_idempotent_and_request_scoped() {
++    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
++    publisher.begin_turn("turn-a");
++    assert!(
++        publisher
++            .begin_backend_tool("request-1", "call-1", "web_search")
++            .is_some()
++    );
++    assert!(
++        publisher
++            .begin_backend_tool("request-1", "call-1", "web_search")
++            .is_none()
++    );
++    assert!(
++        publisher
++            .begin_backend_tool("request-1", "call-2", "x_search")
++            .is_some()
++    );
++    assert_eq!(publisher.snapshot().tools.active_count, 2);
 +
-+        assert!(publisher.finish_backend_request("request-1").is_some());
-+        let done = publisher.snapshot();
-+        assert_eq!(done.tools.active_count, 0);
-+        assert_eq!(done.tools.last_tool_name.as_deref(), Some("x_search"));
-+        assert!(done.latency.last_tool_ms.is_some());
-+    }
++    assert!(
++        publisher
++            .finish_backend_tool("request-1", "call-1")
++            .is_some()
++    );
++    assert!(
++        publisher
++            .finish_backend_tool("request-1", "call-1")
++            .is_none()
++    );
++    assert_eq!(publisher.snapshot().tools.active_count, 1);
 +
-+    #[test]
-+    fn stale_backend_tool_cannot_overwrite_new_turn() {
-+        let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
-+        publisher.begin_turn("turn-a");
-+        publisher.begin_backend_tool("request-a", "call-a", "web_search");
-+        publisher.begin_turn("turn-b");
-+        let revision = publisher.snapshot().revision;
++    assert!(publisher.finish_backend_request("request-1").is_some());
++    let done = publisher.snapshot();
++    assert_eq!(done.tools.active_count, 0);
++    assert_eq!(done.tools.last_tool_name.as_deref(), Some("x_search"));
++    assert!(done.latency.last_tool_ms.is_some());
++}
 +
-+        assert!(publisher.finish_backend_request("request-a").is_none());
-+        let current = publisher.snapshot();
-+        assert_eq!(current.revision, revision);
-+        assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
-+        assert_eq!(current.tools.active_count, 0);
-+        assert_eq!(current.tools.last_tool_name, None);
-+    }
++#[test]
++fn stale_backend_tool_cannot_overwrite_new_turn() {
++    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
++    publisher.begin_turn("turn-a");
++    publisher.begin_backend_tool("request-a", "call-a", "web_search");
++    publisher.begin_turn("turn-b");
++    let revision = publisher.snapshot().revision;
 +
-     #[test]
-     fn context_percent_is_bounded_and_zero_safe() {
-         let usage = StatusTokenUsage {
++    assert!(publisher.finish_backend_request("request-a").is_none());
++    let current = publisher.snapshot();
++    assert_eq!(current.revision, revision);
++    assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
++    assert_eq!(current.tools.active_count, 0);
++    assert_eq!(current.tools.last_tool_name, None);
++}
