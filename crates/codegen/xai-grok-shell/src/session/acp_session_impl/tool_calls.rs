@@ -2407,8 +2407,12 @@ impl SessionActor {
                 .await;
             }
             SamplingEvent::Completed {
-                response, metrics, ..
+                request_id,
+                response,
+                metrics,
             } => {
+                self.status_runtime
+                    .finish_backend_request(request_id.as_str());
                 if let Some(tx) = self.turn_stream_drained.lock().take() {
                     let _ = tx.send(());
                 }
@@ -2493,6 +2497,8 @@ impl SessionActor {
                 .await;
             }
             SamplingEvent::Failed { request_id, error } => {
+                self.status_runtime
+                    .finish_backend_request(request_id.as_str());
                 xai_grok_telemetry::unified_log::error(
                     "shell.turn.inference_failed",
                     Some(self.session_info.id.0.as_ref()),
@@ -2514,7 +2520,13 @@ impl SessionActor {
                     );
                 }
             }
-            SamplingEvent::BackendToolCallStarted { call_id, name, .. } => {
+            SamplingEvent::BackendToolCallStarted {
+                request_id,
+                call_id,
+                name,
+            } => {
+                self.status_runtime
+                    .begin_backend_tool(request_id.as_str(), &call_id, name.clone());
                 let (title, kind, raw_input) = backend_tool_display(&name);
                 self.send_update(
                     acp::SessionUpdate::ToolCall(
@@ -2534,11 +2546,13 @@ impl SessionActor {
                 .await;
             }
             SamplingEvent::BackendToolCallCompleted {
+                request_id,
                 call_id,
                 name,
                 result,
-                ..
             } => {
+                self.status_runtime
+                    .finish_backend_tool(request_id.as_str(), &call_id);
                 let (title, _kind, _raw_input) = backend_tool_display(&name);
                 self.send_update(
                     acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(

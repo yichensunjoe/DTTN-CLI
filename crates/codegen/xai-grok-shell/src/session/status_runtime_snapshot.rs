@@ -3,7 +3,8 @@
 //! Writers publish complete immutable snapshots after runtime events. Readers only
 //! clone an `Arc` and never perform network, filesystem, Git, or async work.
 
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use super::session_model_snapshot::ResolvedSessionModelSnapshot;
@@ -115,7 +116,7 @@ pub struct StatusLatency {
     pub turn_api_duration_ms: Option<u64>,
     /// Absolute aggregate provider API duration for the restored/current session.
     pub session_api_duration_ms: Option<u64>,
-    /// Last individual inference request duration; populated by sampler events later.
+    /// Last successful individual inference request duration (TTLB).
     pub last_request_ms: Option<u64>,
     pub time_to_first_token_ms: Option<u64>,
     pub last_tool_ms: Option<u64>,
@@ -207,9 +208,26 @@ impl StatusRuntimeSnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BackendToolKey {
+    request_id: String,
+    call_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct BackendToolEntry {
+    prompt_id: String,
+    tool_name: String,
+    started_at: Instant,
+}
+
 #[derive(Debug)]
 struct StatusRuntimeInner {
     current: RwLock<Arc<StatusRuntimeSnapshot>>,
+    /// Backend-hosted tools are driven by sampler events rather than local
+    /// dispatch futures, so their abort-safe lifecycle is tracked here by
+    /// `(request_id, call_id)`. The map never crosses the render boundary.
+    backend_tools: Mutex<HashMap<BackendToolKey, BackendToolEntry>>,
 }
 
 /// Cloneable publication handle shared by SessionActor, SessionHandle and TUI.
@@ -267,6 +285,7 @@ impl StatusRuntimePublisher {
         Self {
             inner: Arc::new(StatusRuntimeInner {
                 current: RwLock::new(Arc::new(initial)),
+                backend_tools: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -326,6 +345,14 @@ impl StatusRuntimePublisher {
 
     /// Start a prompt-owned turn and clear only turn-scoped measurements.
     pub fn begin_turn(&self, prompt_id: impl Into<String>) -> Arc<StatusRuntimeSnapshot> {
+        // A prior request can be abandoned without emitting a terminal sampler
+        // event (for example after cancellation). Clear its private tracker before
+        // the new prompt publishes a clean generation.
+        self.inner
+            .backend_tools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
         let prompt_id = prompt_id.into();
         self.update(|snapshot| {
             snapshot.active_prompt_id = Some(prompt_id);
@@ -375,6 +402,161 @@ impl StatusRuntimePublisher {
             snapshot.cost.currency = (snapshot.cost.turn_microunits.is_some()
                 || snapshot.cost.session_microunits.is_some())
             .then(|| "USD".to_string());
+        })
+    }
+
+    /// Publish latency for one successful sampler request only while the
+    /// originating prompt still owns the snapshot. A late response from an
+    /// aborted/older turn is ignored without advancing the revision.
+    pub fn publish_request_latency(
+        &self,
+        prompt_id: &str,
+        request_ms: u64,
+        time_to_first_token_ms: Option<u64>,
+    ) -> Option<Arc<StatusRuntimeSnapshot>> {
+        self.update_if(|snapshot| {
+            if snapshot.active_prompt_id.as_deref() != Some(prompt_id) {
+                return false;
+            }
+            snapshot.latency.last_request_ms = Some(request_ms);
+            snapshot.latency.time_to_first_token_ms = time_to_first_token_ms;
+            true
+        })
+    }
+
+    /// Register a backend-hosted tool call emitted by the sampler. Duplicate
+    /// start events are idempotent and do not inflate the active count.
+    pub fn begin_backend_tool(
+        &self,
+        request_id: &str,
+        call_id: &str,
+        tool_name: impl Into<String>,
+    ) -> Option<Arc<StatusRuntimeSnapshot>> {
+        let key = BackendToolKey {
+            request_id: request_id.to_string(),
+            call_id: call_id.to_string(),
+        };
+        let mut backend_tools = self
+            .inner
+            .backend_tools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if backend_tools.contains_key(&key) {
+            return None;
+        }
+
+        let tool_name = tool_name.into();
+        let mut prompt_id = None;
+        let published = self.update_if(|snapshot| {
+            let Some(active_prompt_id) = snapshot.active_prompt_id.as_ref() else {
+                return false;
+            };
+            prompt_id = Some(active_prompt_id.clone());
+            snapshot.tools.active_count = snapshot.tools.active_count.saturating_add(1);
+            snapshot.tools.last_tool_name = Some(tool_name.clone());
+            true
+        });
+        if let Some(prompt_id) = prompt_id {
+            backend_tools.insert(
+                key,
+                BackendToolEntry {
+                    prompt_id,
+                    tool_name,
+                    started_at: Instant::now(),
+                },
+            );
+        }
+        published
+    }
+
+    /// Finish one backend-hosted tool call. Unknown/duplicate completions are
+    /// silent, and an entry owned by an older prompt cannot touch the new turn.
+    pub fn finish_backend_tool(
+        &self,
+        request_id: &str,
+        call_id: &str,
+    ) -> Option<Arc<StatusRuntimeSnapshot>> {
+        let entry = self
+            .inner
+            .backend_tools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&BackendToolKey {
+                request_id: request_id.to_string(),
+                call_id: call_id.to_string(),
+            })?;
+        self.publish_backend_tools_finished(std::slice::from_ref(&entry))
+    }
+
+    /// Close any backend tools left open when a sampler request terminates.
+    /// Normally each tool has already emitted a completion event; this is the
+    /// fail-safe for transport errors, cancellation, or truncated event streams.
+    pub fn finish_backend_request(&self, request_id: &str) -> Option<Arc<StatusRuntimeSnapshot>> {
+        let entries = {
+            let mut backend_tools = self
+                .inner
+                .backend_tools
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let keys = backend_tools
+                .keys()
+                .filter(|key| key.request_id == request_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| backend_tools.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        self.publish_backend_tools_finished(&entries)
+    }
+
+    /// Drop every outstanding backend-tool tracker, used by explicit cancel.
+    pub fn clear_backend_tools(&self) -> Option<Arc<StatusRuntimeSnapshot>> {
+        let entries = {
+            let mut backend_tools = self
+                .inner
+                .backend_tools
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            backend_tools
+                .drain()
+                .map(|(_, entry)| entry)
+                .collect::<Vec<_>>()
+        };
+        self.publish_backend_tools_finished(&entries)
+    }
+
+    fn publish_backend_tools_finished(
+        &self,
+        entries: &[BackendToolEntry],
+    ) -> Option<Arc<StatusRuntimeSnapshot>> {
+        if entries.is_empty() {
+            return None;
+        }
+        self.update_if(|snapshot| {
+            let Some(active_prompt_id) = snapshot.active_prompt_id.as_deref() else {
+                return false;
+            };
+            let matching_count = entries
+                .iter()
+                .filter(|entry| entry.prompt_id == active_prompt_id)
+                .count();
+            if matching_count == 0 {
+                return false;
+            }
+            snapshot.tools.active_count = snapshot
+                .tools
+                .active_count
+                .saturating_sub(u32::try_from(matching_count).unwrap_or(u32::MAX));
+            if let Some(last) = entries
+                .iter()
+                .filter(|entry| entry.prompt_id == active_prompt_id)
+                .max_by(|left, right| left.started_at.cmp(&right.started_at))
+            {
+                snapshot.tools.last_tool_name = Some(last.tool_name.clone());
+                snapshot.latency.last_tool_ms = Some(last.started_at.elapsed().as_millis() as u64);
+            }
+            true
         })
     }
 

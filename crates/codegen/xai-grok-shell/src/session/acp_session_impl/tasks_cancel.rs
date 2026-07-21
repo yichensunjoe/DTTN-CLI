@@ -262,6 +262,7 @@ impl SessionActor {
         if let Some(prompt_id) = cancelling_prompt_id.as_deref() {
             self.status_runtime.mark_cancelling(prompt_id);
         }
+        self.status_runtime.clear_backend_tools();
         {
             xai_grok_telemetry::unified_log::info(
                 "shell.cancel.processing",
