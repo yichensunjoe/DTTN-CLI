@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - '.github/workflows/dttn-phase-6-status-runtime.yml'
-      - '.github/phase6-status-sampler.patch'
       - 'Cargo.lock'
       - 'crates/build/xai-proto-build/**'
       - 'crates/codegen/xai-grok-shell/src/session/**'
@@ -19,97 +18,73 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-status-patch:
-    name: Apply validated sampler status patch
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  snapshot-contract:
+    name: Snapshot contract (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
-      - name: Checkout head branch
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install protoc --no-progress -y
+
+      - name: Test status runtime contract
+        run: cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
+
+  renderer-wiring:
+    name: Renderer wiring and formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
           fetch-depth: 0
-
-      - name: Cache Rust build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: phase-6-status-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Install protoc
         run: |
           sudo apt-get update
           sudo apt-get install --yes protobuf-compiler
 
-      - name: Apply and format patch
+      - name: Validate changed Rust formatting
         shell: bash
         run: |
           set -euo pipefail
-          test -f .github/phase6-status-sampler.patch
-          patch --dry-run -p1 < .github/phase6-status-sampler.patch
-          patch -p1 < .github/phase6-status-sampler.patch
-          rustfmt --edition 2024 --config skip_children=true \
-            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
-            crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs \
-            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs \
-            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs \
-            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
-          rm .github/phase6-status-sampler.patch
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          mapfile -t changed_rust < <(
+            git diff --name-only --diff-filter=ACM \
+              "origin/${{ github.base_ref }}...HEAD" -- '*.rs'
+          )
+          if (( ${#changed_rust[@]} > 0 )); then
+            rustfmt --edition 2024 --config skip_children=true --check "${changed_rust[@]}"
+          fi
 
-      - name: Test status runtime public contract
-        id: status-tests
-        shell: bash
-        run: |
-          set +e
-          set -uo pipefail
-          cargo test -p xai-grok-shell --test status_runtime_snapshot_contract \
-            2>&1 | tee status-runtime-test.log
-          status=${PIPESTATUS[0]}
-          set -e
-          echo "status=${status}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload status test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase-6-status-test-log
-          path: status-runtime-test.log
-          if-no-files-found: error
-
-      - name: Enforce status test result
-        if: steps.status-tests.outputs.status != '0'
-        shell: bash
-        run: exit 1
+      - name: Test proto build helper
+        run: cargo test -p xai-proto-build
 
       - name: Check production dttn binary
         run: cargo check -p xai-grok-pager-bin --bin dttn
 
       - name: Validate patch whitespace
         shell: bash
-        run: git diff --check
-
-      - name: Commit validated implementation
-        shell: bash
-        env:
-          HEAD_BRANCH: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            .github/phase6-status-sampler.patch \
-            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
-            crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs \
-            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs \
-            crates/codegen/xai-grok-shell/src/session/acp_session_impl/tasks_cancel.rs \
-            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
-          git diff --cached --check
-          git commit -m 'feat: publish sampler latency and backend tool activity'
-          git push origin "HEAD:${HEAD_BRANCH}"
+        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
