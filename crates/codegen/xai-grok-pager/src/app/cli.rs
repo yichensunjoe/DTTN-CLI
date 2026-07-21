@@ -17,6 +17,8 @@ pub enum Command {
     },
     /// Read or update persistent user configuration without starting an agent
     Config(crate::config_cmd::ConfigArgs),
+    /// Interactive configuration wizard (model providers, credentials, ...)
+    Configure,
     /// Manage running leader processes
     Leader(LeaderMgmtArgs),
     /// Sign out and clear cached credentials
@@ -50,8 +52,8 @@ pub enum Command {
     Plugin(crate::plugin_cmd::PluginArgs),
     /// Manage cross-session memory
     Memory(crate::memory_cmd::MemoryArgs),
-    /// List available models and exit
-    Models,
+    /// List configured models or set the default
+    Models(crate::models::ModelsArgs),
     /// List, search, or restore sessions
     Sessions(crate::sessions_cmd::SessionsArgs),
     /// Fetch and install managed configuration

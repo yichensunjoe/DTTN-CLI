@@ -48,6 +48,9 @@ pub struct CustomModelConfig {
     pub model_id: String,
     pub display_name: Option<String>,
     pub base_url: String,
+    /// Plaintext API key written directly to the model entry (`api_key = "..."`).
+    /// When set, takes precedence over `api_key_env` and no `env_key` is written.
+    pub api_key: Option<String>,
     pub api_key_env: Option<String>,
     pub api_backend: CustomModelApiBackend,
     pub auth_scheme: CustomModelAuthScheme,
@@ -75,7 +78,7 @@ pub enum UserConfigError {
     InvalidBaseUrl,
     #[error("invalid API key environment variable name")]
     InvalidApiKeyEnv,
-    #[error("remote custom providers require an API key environment variable")]
+    #[error("remote custom providers require an API key (set api_key or api_key_env)")]
     MissingApiKeyEnv,
     #[error("context window must be greater than zero and fit in a TOML integer")]
     InvalidContextWindow,
@@ -304,7 +307,12 @@ fn set_custom_model_at(path: &Path, config: &CustomModelConfig) -> Result<String
         .as_deref()
         .map(validate_api_key_env)
         .transpose()?;
-    if api_key_env.is_none() && !is_loopback {
+    let plaintext_key = config
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if api_key_env.is_none() && plaintext_key.is_none() && !is_loopback {
         return Err(UserConfigError::MissingApiKeyEnv);
     }
     if config.context_window == 0 || i64::try_from(config.context_window).is_err() {
@@ -339,10 +347,16 @@ fn set_custom_model_at(path: &Path, config: &CustomModelConfig) -> Result<String
 
     entry.insert("model", value(model_id));
     entry.insert("base_url", value(base_url));
-    if let Some(api_key_env) = api_key_env {
+    if let Some(key) = plaintext_key {
+        // Plaintext key wins; clear any stale env_key so the entry has one source.
+        entry.insert("api_key", value(key));
+        entry.remove("env_key");
+    } else if let Some(api_key_env) = api_key_env {
         entry.insert("env_key", value(api_key_env));
+        entry.remove("api_key");
     } else {
         entry.remove("env_key");
+        entry.remove("api_key");
     }
     entry.insert("api_backend", value(config.api_backend.as_config_value()));
     entry.insert("auth_scheme", value(config.auth_scheme.as_config_value()));
@@ -439,6 +453,7 @@ mod tests {
             model_id: "code-v1".to_owned(),
             display_name: Some("Acme Code".to_owned()),
             base_url: "https://models.acme.test/v1/".to_owned(),
+            api_key: None,
             api_key_env: Some("ACME_API_KEY".to_owned()),
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
@@ -469,6 +484,7 @@ mod tests {
             model_id: "model:latest".to_owned(),
             display_name: None,
             base_url: "http://127.0.0.1:1234/v1".to_owned(),
+            api_key: None,
             api_key_env: None,
             api_backend: CustomModelApiBackend::Responses,
             auth_scheme: CustomModelAuthScheme::Bearer,
@@ -492,6 +508,7 @@ mod tests {
             model_id: "secure-local".to_owned(),
             display_name: None,
             base_url: "https://127.0.0.2:8443/v1".to_owned(),
+            api_key: None,
             api_key_env: None,
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
@@ -514,6 +531,7 @@ mod tests {
             model_id: "code-v1".to_owned(),
             display_name: Some("Old Name".to_owned()),
             base_url: "https://models.acme.test/v1".to_owned(),
+            api_key: None,
             api_key_env: Some("ACME_API_KEY".to_owned()),
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
@@ -539,6 +557,7 @@ mod tests {
             model_id: "model".to_owned(),
             display_name: None,
             base_url: "https://secret@models.example.test/v1".to_owned(),
+            api_key: None,
             api_key_env: Some("UNSAFE_API_KEY".to_owned()),
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
@@ -562,6 +581,7 @@ mod tests {
             model_id: "model".to_owned(),
             display_name: None,
             base_url: "https://models.example.test/v1".to_owned(),
+            api_key: None,
             api_key_env: None,
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
@@ -585,6 +605,7 @@ mod tests {
             model_id: "model".to_owned(),
             display_name: None,
             base_url: "http://models.example.test/v1".to_owned(),
+            api_key: None,
             api_key_env: Some("UNSAFE_API_KEY".to_owned()),
             api_backend: CustomModelApiBackend::ChatCompletions,
             auth_scheme: CustomModelAuthScheme::Bearer,
@@ -597,6 +618,53 @@ mod tests {
             Err(UserConfigError::InvalidBaseUrl)
         ));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn plaintext_api_key_is_written_and_clears_env_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let config = CustomModelConfig {
+            provider_id: "acme".to_owned(),
+            model_id: "code-v1".to_owned(),
+            display_name: None,
+            base_url: "https://models.acme.test/v1".to_owned(),
+            api_key: Some("sk-plaintext-secret".to_owned()),
+            api_key_env: None,
+            api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
+            context_window: 131_072,
+            max_completion_tokens: None,
+            set_default: true,
+        };
+        assert_eq!(set_custom_model_at(&path, &config).unwrap(), "acme/code-v1");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("api_key = \"sk-plaintext-secret\""));
+        assert!(!raw.contains("env_key ="));
+        assert!(raw.contains("default = \"acme/code-v1\""));
+    }
+
+    #[test]
+    fn plaintext_api_key_takes_precedence_over_env_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let config = CustomModelConfig {
+            provider_id: "acme".to_owned(),
+            model_id: "code-v1".to_owned(),
+            display_name: None,
+            base_url: "https://models.acme.test/v1".to_owned(),
+            api_key: Some("sk-wins".to_owned()),
+            api_key_env: Some("ACME_API_KEY".to_owned()),
+            api_backend: CustomModelApiBackend::ChatCompletions,
+            auth_scheme: CustomModelAuthScheme::Bearer,
+            context_window: 131_072,
+            max_completion_tokens: None,
+            set_default: false,
+        };
+        set_custom_model_at(&path, &config).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("api_key = \"sk-wins\""));
+        assert!(!raw.contains("env_key ="));
     }
 
     #[test]

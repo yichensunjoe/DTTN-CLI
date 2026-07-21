@@ -126,7 +126,7 @@ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
         }
         Some(ConfigCommand::Models(args)) => run_models(args),
         Some(ConfigCommand::Path { json }) => run_path(json),
-        None => run_model(None, false, false),
+        None => crate::configure_wizard::run_wizard(),
     }
 }
 
@@ -209,6 +209,7 @@ fn run_custom_model(args: CustomModelArgs, json: bool) -> anyhow::Result<()> {
         model_id: args.model,
         display_name: args.name,
         base_url: args.base_url,
+        api_key: None,
         api_key_env: args.api_key_env,
         api_backend: args.backend.into(),
         auth_scheme,

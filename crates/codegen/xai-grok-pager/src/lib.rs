@@ -9,6 +9,7 @@ pub mod client_identity;
 pub mod completions_cmd;
 pub mod config_cmd;
 mod config_toml_edit;
+pub mod configure_wizard;
 pub mod diagnostics;
 pub mod diff;
 pub mod docs;
