@@ -1,0 +1,75 @@
+name: DTTN Apply Status Wire Once
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dttn-apply-status-wire-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-status-wire:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout head branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Apply status wire implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/status-wire.patch.gz.b64 <<'PATCH'
+          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
+          PATCH
+          base64 --decode /tmp/status-wire.patch.gz.b64 | gunzip > /tmp/status-wire.patch
+          git apply --check /tmp/status-wire.patch
+          git apply /tmp/status-wire.patch
+          rustfmt --edition 2024 --config skip_children=true \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_types.rs \
+            crates/codegen/xai-grok-shell/src/session/pending_interaction.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_setup.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+
+      - name: Test status runtime contract
+        run: cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
+
+      - name: Test proto build helper
+        run: cargo test -p xai-proto-build
+
+      - name: Check production dttn binary
+        run: cargo check -p xai-grok-pager-bin --bin dttn
+
+      - name: Validate whitespace
+        run: git diff --check
+
+      - name: Commit validated implementation
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_types.rs \
+            crates/codegen/xai-grok-shell/src/session/pending_interaction.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_setup.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+          git diff --cached --check
+          git commit -m 'feat: add status runtime wire snapshots and notifications'
+          git push origin "HEAD:${HEAD_BRANCH}"
