@@ -1,0 +1,41 @@
+name: DTTN Cleanup Pager Status Runtime Once
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dttn-cleanup-pager-status-runtime-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout head branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Remove one-time workflows
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git rm -f --ignore-unmatch \
+            .github/workflows/dttn-apply-pager-status-runtime-once.yml \
+            .github/workflows/dttn-cleanup-pager-status-runtime-once.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git diff --cached --check
+          git commit -m 'chore: remove pager status runtime staging workflows'
+          git push origin "HEAD:${HEAD_BRANCH}"
