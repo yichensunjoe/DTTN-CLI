@@ -65,7 +65,7 @@ jobs:
 
       - name: Test status runtime unit and public contracts
         run: |
-          cargo test -p xai-grok-shell status_runtime_snapshot::tests
+          cargo test -p xai-grok-shell --lib status_runtime_snapshot::tests
           cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
 
       - name: Check production dttn binary
