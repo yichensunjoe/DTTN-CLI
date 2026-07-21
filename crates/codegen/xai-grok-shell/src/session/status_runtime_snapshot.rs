@@ -4,6 +4,7 @@
 //! clone an `Arc` and never perform network, filesystem, Git, or async work.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -12,7 +13,8 @@ use super::session_model_snapshot::ResolvedSessionModelSnapshot;
 const USD_TICKS_PER_MICROUNIT: u64 = 10_000;
 
 /// Coarse execution state rendered by status surfaces.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StatusRunState {
     #[default]
     Idle,
@@ -208,6 +210,84 @@ impl StatusRuntimeSnapshot {
     }
 }
 
+/// Stable, transport-safe projection of the private runtime snapshot.
+///
+/// Internal ownership tokens, synchronization primitives, and backend tool
+/// bookkeeping intentionally do not cross this boundary.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StatusRuntimeWireSnapshot {
+    pub revision: u64,
+    pub run_state: StatusRunState,
+    pub model_id: String,
+    pub context_window: u64,
+    pub max_completion_tokens: Option<u32>,
+    pub catalog_stale: bool,
+    pub turn_input_tokens: u64,
+    pub turn_output_tokens: u64,
+    pub turn_cached_input_tokens: u64,
+    pub session_input_tokens: u64,
+    pub session_output_tokens: u64,
+    pub session_cached_input_tokens: u64,
+    pub cost_currency: Option<String>,
+    pub turn_cost_microunits: Option<u64>,
+    pub session_cost_microunits: Option<u64>,
+    pub turn_api_duration_ms: Option<u64>,
+    pub session_api_duration_ms: Option<u64>,
+    pub last_request_ms: Option<u64>,
+    pub time_to_first_token_ms: Option<u64>,
+    pub last_tool_ms: Option<u64>,
+    pub active_tools: u32,
+    pub queued_tools: u32,
+    pub last_tool_name: Option<String>,
+    pub pending_interactions: u32,
+}
+
+impl From<&StatusRuntimeSnapshot> for StatusRuntimeWireSnapshot {
+    fn from(snapshot: &StatusRuntimeSnapshot) -> Self {
+        Self {
+            revision: snapshot.revision,
+            run_state: snapshot.run_state,
+            model_id: snapshot.model.model_id.clone(),
+            context_window: snapshot.model.context_window,
+            max_completion_tokens: snapshot.model.max_completion_tokens,
+            catalog_stale: snapshot.model.catalog_stale,
+            turn_input_tokens: snapshot.tokens.turn_input,
+            turn_output_tokens: snapshot.tokens.turn_output,
+            turn_cached_input_tokens: snapshot.tokens.turn_cached_input,
+            session_input_tokens: snapshot.tokens.session_input,
+            session_output_tokens: snapshot.tokens.session_output,
+            session_cached_input_tokens: snapshot.tokens.session_cached_input,
+            cost_currency: snapshot.cost.currency.clone(),
+            turn_cost_microunits: snapshot.cost.turn_microunits,
+            session_cost_microunits: snapshot.cost.session_microunits,
+            turn_api_duration_ms: snapshot.latency.turn_api_duration_ms,
+            session_api_duration_ms: snapshot.latency.session_api_duration_ms,
+            last_request_ms: snapshot.latency.last_request_ms,
+            time_to_first_token_ms: snapshot.latency.time_to_first_token_ms,
+            last_tool_ms: snapshot.latency.last_tool_ms,
+            active_tools: snapshot.tools.active_count,
+            queued_tools: snapshot.tools.queued_count,
+            last_tool_name: snapshot.tools.last_tool_name.clone(),
+            pending_interactions: snapshot.pending_interactions,
+        }
+    }
+}
+
+impl From<Arc<StatusRuntimeSnapshot>> for StatusRuntimeWireSnapshot {
+    fn from(snapshot: Arc<StatusRuntimeSnapshot>) -> Self {
+        Self::from(snapshot.as_ref())
+    }
+}
+
+/// Payload for the ephemeral `x.ai/status_runtime` notification.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusRuntimeNotification {
+    pub session_id: agent_client_protocol::SessionId,
+    pub status: StatusRuntimeWireSnapshot,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BackendToolKey {
     request_id: String,
@@ -224,6 +304,8 @@ struct BackendToolEntry {
 #[derive(Debug)]
 struct StatusRuntimeInner {
     current: RwLock<Arc<StatusRuntimeSnapshot>>,
+    changes: tokio::sync::watch::Sender<Arc<StatusRuntimeSnapshot>>,
+    notification_bridge_started: AtomicBool,
     /// Backend-hosted tools are driven by sampler events rather than local
     /// dispatch futures, so their abort-safe lifecycle is tracked here by
     /// `(request_id, call_id)`. The map never crosses the render boundary.
@@ -282,9 +364,13 @@ impl Drop for StatusToolGuard {
 
 impl StatusRuntimePublisher {
     pub fn new(initial: StatusRuntimeSnapshot) -> Self {
+        let initial = Arc::new(initial);
+        let (changes, _initial_receiver) = tokio::sync::watch::channel(initial.clone());
         Self {
             inner: Arc::new(StatusRuntimeInner {
-                current: RwLock::new(Arc::new(initial)),
+                current: RwLock::new(initial),
+                changes,
+                notification_bridge_started: AtomicBool::new(false),
                 backend_tools: Mutex::new(HashMap::new()),
             }),
         }
@@ -297,6 +383,20 @@ impl StatusRuntimePublisher {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Subscribe to coalesced immutable generations. A late subscriber starts
+    /// with the latest complete snapshot and does not require replay history.
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<StatusRuntimeSnapshot>> {
+        self.inner.changes.subscribe()
+    }
+
+    /// Atomically claim the single transport bridge for this session.
+    pub(crate) fn claim_notification_bridge(&self) -> bool {
+        self.inner
+            .notification_bridge_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     /// Publish a complete new immutable generation.
@@ -318,6 +418,9 @@ impl StatusRuntimePublisher {
         next.revision = next.revision.saturating_add(1);
         let next = Arc::new(next);
         *current = next.clone();
+        // `send_replace` is synchronous and non-blocking. Keeping it inside the
+        // writer critical section preserves revision ordering across writers.
+        self.inner.changes.send_replace(next.clone());
         next
     }
 
@@ -340,6 +443,7 @@ impl StatusRuntimePublisher {
         next.revision = next.revision.saturating_add(1);
         let next = Arc::new(next);
         *current = next.clone();
+        self.inner.changes.send_replace(next.clone());
         Some(next)
     }
 

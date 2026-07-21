@@ -512,6 +512,9 @@ pub struct SessionInfoData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
     pub turns: u64,
+    /// Latest ephemeral runtime status for initial and late-attaching clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_runtime: Option<super::status_runtime_snapshot::StatusRuntimeWireSnapshot>,
     /// Current turn (0-based).
     /// Matches the `turn_number` used in TurnStarted events, traces, and rewinds.
     #[serde(default)]

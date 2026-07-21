@@ -1,6 +1,6 @@
 use xai_grok_shell::session::status_runtime_snapshot::{
-    StatusRunState, StatusRuntimePublisher, StatusRuntimeSnapshot, StatusTokenUsage,
-    StatusUsageTotals,
+    StatusRunState, StatusRuntimePublisher, StatusRuntimeSnapshot, StatusRuntimeWireSnapshot,
+    StatusTokenUsage, StatusUsageTotals,
 };
 
 #[test]
@@ -227,4 +227,60 @@ fn stale_backend_tool_cannot_overwrite_new_turn() {
     assert_eq!(current.active_prompt_id.as_deref(), Some("turn-b"));
     assert_eq!(current.tools.active_count, 0);
     assert_eq!(current.tools.last_tool_name, None);
+}
+
+#[test]
+fn wire_snapshot_roundtrips_without_private_fields() {
+    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+    publisher.begin_turn("turn-private");
+    publisher.publish_request_latency("turn-private", 120, Some(30));
+    let wire = StatusRuntimeWireSnapshot::from(publisher.snapshot());
+
+    let json = serde_json::to_value(&wire).expect("wire snapshot serializes");
+    assert_eq!(json["runState"], "running");
+    assert_eq!(json["lastRequestMs"], 120);
+    assert_eq!(json["timeToFirstTokenMs"], 30);
+    assert!(json.get("activePromptId").is_none());
+    assert!(json.get("backendTools").is_none());
+    assert!(json.get("changes").is_none());
+
+    let decoded: StatusRuntimeWireSnapshot =
+        serde_json::from_value(json).expect("wire snapshot deserializes");
+    assert_eq!(decoded, wire);
+}
+
+#[test]
+fn wire_snapshot_accepts_missing_future_fields() {
+    let decoded: StatusRuntimeWireSnapshot = serde_json::from_value(serde_json::json!({
+        "revision": 7,
+        "runState": "idle",
+        "modelId": "provider/model"
+    }))
+    .expect("defaulted wire fields keep partial payloads compatible");
+    assert_eq!(decoded.revision, 7);
+    assert_eq!(decoded.model_id, "provider/model");
+    assert_eq!(decoded.context_window, 0);
+    assert_eq!(decoded.session_cost_microunits, None);
+}
+
+#[tokio::test]
+async fn watch_subscriber_starts_with_current_snapshot() {
+    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+    publisher.update(|snapshot| snapshot.tokens.session_input = 42);
+    let receiver = publisher.subscribe();
+    assert_eq!(receiver.borrow().tokens.session_input, 42);
+    assert_eq!(receiver.borrow().revision, 1);
+}
+
+#[tokio::test]
+async fn slow_watch_subscriber_observes_latest_generation() {
+    let publisher = StatusRuntimePublisher::new(StatusRuntimeSnapshot::default());
+    let mut receiver = publisher.subscribe();
+    for value in 1..=100 {
+        publisher.update(|snapshot| snapshot.tokens.session_output = value);
+    }
+    receiver.changed().await.expect("publisher remains alive");
+    let latest = receiver.borrow_and_update();
+    assert_eq!(latest.tokens.session_output, 100);
+    assert_eq!(latest.revision, 100);
 }

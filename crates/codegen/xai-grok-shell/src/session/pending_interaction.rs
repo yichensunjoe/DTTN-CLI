@@ -17,12 +17,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::watch;
+
 use agent_client_protocol as acp;
 use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 
 use crate::extensions::notification::{SessionNotification, SessionUpdate as XaiSessionUpdate};
 use crate::session::status_runtime_snapshot::{
-    StatusRunState, StatusRuntimePublisher, StatusRuntimeSnapshot,
+    StatusRunState, StatusRuntimeNotification, StatusRuntimePublisher, StatusRuntimeSnapshot,
+    StatusRuntimeWireSnapshot,
 };
 
 /// Shared per-session map of open reverse-requests, keyed by `tool_call_id`.
@@ -76,6 +79,68 @@ fn broadcast(gateway: &GatewaySender, session_id: &acp::SessionId, update: XaiSe
             "x.ai/session_notification",
             params.into(),
         ));
+    }
+}
+
+pub(crate) const STATUS_RUNTIME_NOTIFICATION_METHOD: &str = "x.ai/status_runtime";
+
+/// Start the one coalescing, non-blocking status notification bridge for a session.
+///
+/// The bridge is lazy: `x.ai/session/info` supplies the initial snapshot and
+/// claims this task for clients that need live updates. It exits when all
+/// publisher handles are dropped.
+pub(crate) fn ensure_status_runtime_bridge(
+    publisher: &StatusRuntimePublisher,
+    gateway: GatewaySender,
+    session_id: acp::SessionId,
+) {
+    if !publisher.claim_notification_bridge() {
+        return;
+    }
+    let receiver = publisher.subscribe();
+    tokio::task::spawn_local(run_status_runtime_bridge(receiver, gateway, session_id));
+}
+
+async fn run_status_runtime_bridge(
+    mut receiver: watch::Receiver<Arc<StatusRuntimeSnapshot>>,
+    gateway: GatewaySender,
+    session_id: acp::SessionId,
+) {
+    let mut last_revision = None;
+    loop {
+        let snapshot = receiver.borrow_and_update().clone();
+        let revision = snapshot.revision;
+        if last_revision.map_or(true, |last| revision > last) {
+            forward_status_snapshot(&gateway, &session_id, snapshot);
+            last_revision = Some(revision);
+        }
+        if receiver.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+fn forward_status_snapshot(
+    gateway: &GatewaySender,
+    session_id: &acp::SessionId,
+    snapshot: Arc<StatusRuntimeSnapshot>,
+) {
+    let notification = StatusRuntimeNotification {
+        session_id: session_id.clone(),
+        status: StatusRuntimeWireSnapshot::from(snapshot),
+    };
+    match serde_json::value::to_raw_value(&notification) {
+        Ok(params) => {
+            gateway.forward_fire_and_forget(acp::ExtNotification::new(
+                STATUS_RUNTIME_NOTIFICATION_METHOD,
+                params.into(),
+            ));
+        }
+        Err(error) => tracing::warn!(
+            session_id = %session_id.0,
+            %error,
+            "failed to serialize status runtime notification"
+        ),
     }
 }
 
@@ -293,5 +358,27 @@ mod tests {
             has_parked_plan_approval(&reg),
             "a poisoned lock must still surface the parked approval, not panic"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_bridge_exits_after_publishers_drop() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let publisher = new_status();
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                let gateway = GatewaySender::new(tx);
+                let receiver = publisher.subscribe();
+                let task = tokio::task::spawn_local(run_status_runtime_bridge(
+                    receiver,
+                    gateway,
+                    acp::SessionId::new("sess-bridge"),
+                ));
+                drop(publisher);
+                tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                    .await
+                    .expect("bridge exits when watch closes")
+                    .expect("bridge task does not panic");
+            })
+            .await;
     }
 }
