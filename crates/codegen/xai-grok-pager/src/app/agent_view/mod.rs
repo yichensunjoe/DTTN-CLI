@@ -829,6 +829,14 @@ pub struct AgentView {
     pub(crate) modal_hovered_key: Option<char>,
     /// Cached server-reported context state.
     pub context_state: Option<xai_grok_shell::session::ContextInfo>,
+    /// Latest transport-safe status generation for this session. Updated from
+    /// `x.ai/session/info` and `x.ai/status_runtime`; stale/equal revisions are ignored.
+    pub status_runtime:
+        Option<xai_grok_shell::session::status_runtime_snapshot::StatusRuntimeWireSnapshot>,
+    /// Plain-text render cache keyed by status revision, live context counters,
+    /// and terminal width. The cache contains no transport or configuration state.
+    pub(crate) status_runtime_render_cache:
+        Option<crate::views::status_runtime::StatusRuntimeRenderCache>,
     /// Gateway light-frontend session (`kind: "chat"` / `--chat` / conversation
     /// resume). Suppresses Build credits / local sampler context telemetry so the
     /// status bar and prompt never imply remote usage from wrong metrics.

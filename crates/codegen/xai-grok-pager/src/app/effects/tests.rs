@@ -1885,6 +1885,7 @@ fn make_session_info(
             api_backend: None,
             conversation_id: None,
             turns: 0,
+            status_runtime: None,
             turn_index: 0,
             context: ContextInfo {
                 used,
