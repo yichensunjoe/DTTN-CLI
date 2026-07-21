@@ -34,6 +34,15 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: phase-6-status-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
       - name: Install protoc
         run: |
           sudo apt-get update
@@ -64,9 +73,33 @@ jobs:
           rm .github/phase6-status-sampler.patch
 
       - name: Test status runtime unit and public contracts
+        id: status-tests
+        shell: bash
         run: |
-          cargo test -p xai-grok-shell --lib status_runtime_snapshot::tests
-          cargo test -p xai-grok-shell --test status_runtime_snapshot_contract
+          set -uo pipefail
+          status=0
+          cargo test -p xai-grok-shell --lib status_runtime_snapshot::tests \
+            2>&1 | tee status-runtime-test.log
+          status=${PIPESTATUS[0]}
+          if (( status == 0 )); then
+            cargo test -p xai-grok-shell --test status_runtime_snapshot_contract \
+              2>&1 | tee -a status-runtime-test.log
+            status=${PIPESTATUS[0]}
+          fi
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload status test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-6-status-test-log
+          path: status-runtime-test.log
+          if-no-files-found: error
+
+      - name: Enforce status test result
+        if: steps.status-tests.outputs.status != '0'
+        shell: bash
+        run: exit 1
 
       - name: Check production dttn binary
         run: cargo check -p xai-grok-pager-bin --bin dttn
