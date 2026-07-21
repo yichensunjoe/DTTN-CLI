@@ -869,6 +869,11 @@ impl SessionActor {
             *self.turn_stream_drained.lock() = Some(tx);
             rx
         };
+        let status_prompt_id = self
+            .current_prompt_id
+            .lock()
+            .expect("current_prompt_id mutex poisoned")
+            .clone();
         let request_id = xai_grok_sampler::RequestId::random();
         let request_id_str = request_id.as_str().to_string();
         match self
@@ -877,6 +882,13 @@ impl SessionActor {
             .await
         {
             Ok((response, metrics)) => {
+                if let Some(prompt_id) = status_prompt_id.as_deref() {
+                    self.status_runtime.publish_request_latency(
+                        prompt_id,
+                        metrics.time_to_last_byte_ms,
+                        metrics.time_to_first_token_ms,
+                    );
+                }
                 let span = tracing::Span::current();
                 span.record("request_id", request_id_str.as_str());
                 if let Some(ttft) = metrics.time_to_first_token_ms {

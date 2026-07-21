@@ -1287,18 +1287,49 @@ impl AgentView {
         }
         let ctx_used = self.context_state.as_ref().map(|c| c.used);
         let model_window = self.session.models.get_context_window();
+        let runtime_window = self
+            .status_runtime
+            .as_ref()
+            .and_then(|runtime| (runtime.context_window > 0).then_some(runtime.context_window));
         let ctx_total = self
             .context_state
             .as_ref()
             .and_then(|c| (c.total > 0).then_some(c.total))
+            .or(runtime_window)
             .or(model_window);
-        if let Some(ctx_line) = context_bar::context_bar_line_for_session(
-            ctx_used,
-            ctx_total,
-            self.hit_context.hovered,
-            &theme,
-            self.chat_kind,
-        ) {
+        let runtime_rendered = if let Some(runtime) = self.status_runtime.as_ref() {
+            let reserved_width = (layout.status_bar.width / 3).min(24);
+            let available_width = layout
+                .status_bar
+                .width
+                .saturating_sub(reserved_width)
+                .max(1);
+            let line = crate::views::status_runtime::status_runtime_line(
+                &mut self.status_runtime_render_cache,
+                runtime,
+                ctx_used,
+                ctx_total,
+                available_width,
+                &theme,
+            );
+            if line.width() > 0 {
+                status.push("runtime", line);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !runtime_rendered
+            && let Some(ctx_line) = context_bar::context_bar_line_for_session(
+                ctx_used,
+                ctx_total,
+                self.hit_context.hovered,
+                &theme,
+                self.chat_kind,
+            )
+        {
             status.push("context", ctx_line);
         }
         let running = self.session.current_prompt_id.as_deref();
@@ -1334,7 +1365,10 @@ impl AgentView {
         let areas = status.render(buf, layout.status_bar);
         self.hit_bg_status.rect = areas.get("bg_tasks").copied();
         self.hit_goal_status.rect = areas.get("goal").copied();
-        self.hit_context.rect = areas.get("context").copied();
+        self.hit_context.rect = areas
+            .get("context")
+            .or_else(|| areas.get("runtime"))
+            .copied();
         self.hit_credits.rect = areas.get("credits").copied();
         self.hit_plan_button.rect = areas.get("plan").copied();
         self.hit_queue_badge.rect = areas.get("queue").copied();

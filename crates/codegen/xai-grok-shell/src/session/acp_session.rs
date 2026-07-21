@@ -609,6 +609,8 @@ pub(crate) struct SessionActor {
     /// Also stores credentials (api_key, optional extra access key,
     /// client_version) opaquely.
     pub(crate) chat_state_handle: xai_chat_state::ChatStateHandle,
+    /// Publisher for the complete immutable status-line state.
+    pub(crate) status_runtime: crate::session::status_runtime_snapshot::StatusRuntimePublisher,
     /// Current running prompt/turn id, shared with SessionHandle.
     pub(crate) current_prompt_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Open blocking reverse-requests (permission / question / plan-approval),

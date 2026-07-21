@@ -682,9 +682,13 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::SessionAgentNameResolved {
             agent_id,
             agent_name,
+            status_runtime,
         } => {
             if let Some(agent) = app.agents.get_mut(&agent_id) {
                 agent.session_agent_name = agent_name.clone();
+                if let Some(status) = status_runtime {
+                    agent.apply_status_runtime(status);
+                }
                 if let Some(modal) = agent.agents_modal.as_mut() {
                     modal.active_agent = agent_name;
                 }
@@ -693,11 +697,14 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         }
         TaskResult::SessionInfoComplete {
             agent_id,
-            info,
+            mut info,
             text,
         } => {
             if let Some(agent) = app.agents.get_mut(&agent_id) {
                 agent.session_agent_name = info.data.agent_name.clone();
+                if let Some(status) = info.data.status_runtime.take() {
+                    agent.apply_status_runtime(status);
+                }
                 if let Some(modal) = agent.agents_modal.as_mut() {
                     modal.active_agent = info.data.agent_name.clone();
                 }

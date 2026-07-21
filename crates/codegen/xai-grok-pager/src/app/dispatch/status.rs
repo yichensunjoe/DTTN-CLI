@@ -421,9 +421,12 @@ pub(super) fn handle_coding_data_sharing_failed(
 pub(super) fn handle_context_info_complete(
     app: &mut AppView,
     agent_id: AgentId,
-    info: Box<xai_grok_shell::session::SessionInfoResponse>,
+    mut info: Box<xai_grok_shell::session::SessionInfoResponse>,
 ) -> Vec<Effect> {
     if let Some(agent) = app.agents.get_mut(&agent_id) {
+        if let Some(status) = info.data.status_runtime.take() {
+            agent.apply_status_runtime(status);
+        }
         let model = info.data.model.as_deref().unwrap_or("unknown").to_string();
         // Take ownership of the snapshot once, hand a clone to the
         // agent's running counters, then move the original into the

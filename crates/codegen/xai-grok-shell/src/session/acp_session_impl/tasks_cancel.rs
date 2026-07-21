@@ -74,6 +74,7 @@ impl AgentTask {
         persist_ack: Option<oneshot::Sender<()>>,
         parsed_prompt_tx: Option<oneshot::Sender<ParsedPromptInfo>>,
     ) -> Self {
+        session.status_runtime.begin_turn(prompt_id.clone());
         let pid = prompt_id.clone();
         Self {
             prompt_id,
@@ -172,6 +173,17 @@ async fn run_task(
             parsed_prompt_tx,
         )
         .await;
+    let terminal_state = match &result {
+        Err(_)
+        | Ok(PromptTurnOk {
+            completion_kind: PromptCompletionKind::MaxTurnsReached { .. },
+            ..
+        }) => crate::session::status_runtime_snapshot::StatusRunState::Failed,
+        _ => crate::session::status_runtime_snapshot::StatusRunState::Idle,
+    };
+    session
+        .status_runtime
+        .finish_turn(&prompt_id, terminal_state);
     let _ = completion_tx.send((prompt_id, result));
 }
 
@@ -240,6 +252,17 @@ impl SessionActor {
             .lock()
             .expect("current_prompt_id mutex poisoned")
             .clone();
+        let cancelling_prompt_id = {
+            let state = self.state.lock().await;
+            state
+                .running_prompt_id()
+                .map(str::to_owned)
+                .or_else(|| pinned_prompt_id.clone())
+        };
+        if let Some(prompt_id) = cancelling_prompt_id.as_deref() {
+            self.status_runtime.mark_cancelling(prompt_id);
+        }
+        self.status_runtime.clear_backend_tools();
         {
             xai_grok_telemetry::unified_log::info(
                 "shell.cancel.processing",
@@ -424,7 +447,8 @@ impl SessionActor {
         let cancelled_prompt_id = running_task
             .as_ref()
             .map(|t| t.prompt_id.clone())
-            .or(pinned_prompt_id);
+            .or(pinned_prompt_id)
+            .or(cancelling_prompt_id);
 
         self.agent
             .borrow()
@@ -515,12 +539,27 @@ impl SessionActor {
         } else {
             None
         };
+        let session_usage = self.chat_state_handle.try_get_session_usage().await.ok();
+        self.status_runtime.publish_usage(
+            cancelled_usage
+                .as_ref()
+                .map(crate::session::status_runtime_snapshot::StatusUsageTotals::from_prompt_usage),
+            session_usage.as_ref().map(
+                crate::session::status_runtime_snapshot::StatusUsageTotals::from_session_ledger,
+            ),
+        );
         {
             let mut current_prompt_id = self
                 .current_prompt_id
                 .lock()
                 .expect("current_prompt_id mutex poisoned");
             *current_prompt_id = None;
+        }
+        if let Some(prompt_id) = cancelled_prompt_id.as_deref() {
+            self.status_runtime.finish_turn(
+                prompt_id,
+                crate::session::status_runtime_snapshot::StatusRunState::Idle,
+            );
         }
         if rewound_input.is_none()
             && let Some(prompt_id) = cancelled_prompt_id

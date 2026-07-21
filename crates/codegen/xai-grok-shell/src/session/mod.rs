@@ -9,6 +9,7 @@ pub mod notifications;
 pub mod pending_interaction;
 pub mod prompt_queue;
 pub mod session_model_snapshot;
+pub mod status_runtime_snapshot;
 pub mod two_pass;
 pub use self::acp_session::*;
 pub use self::acp_types::*;

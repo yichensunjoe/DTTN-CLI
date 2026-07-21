@@ -230,6 +230,11 @@ pub(crate) async fn spawn_session_actor(
         &mut sampling_config,
         &snapshot_resolution.snapshot,
     );
+    let status_runtime = crate::session::status_runtime_snapshot::StatusRuntimePublisher::new(
+        crate::session::status_runtime_snapshot::StatusRuntimeSnapshot::from_session_model(
+            &snapshot_resolution.snapshot,
+        ),
+    );
     let context_window_override = match snapshot_resolution.kind {
         crate::session::session_model_snapshot::SnapshotResolutionKind::Created => {
             requested_context_window_override
@@ -1185,6 +1190,7 @@ pub(crate) async fn spawn_session_actor(
         mcp_strategy,
         initial_client_mcp_servers: initial_client_mcp_servers.clone(),
         chat_state_handle,
+        status_runtime: status_runtime.clone(),
         current_prompt_id: current_prompt_id.clone(),
         pending_interactions: pending_interactions.clone(),
         telemetry_enabled,
@@ -1543,6 +1549,7 @@ pub(crate) async fn spawn_session_actor(
         let session_id = session.session_info.id.clone();
         let current_prompt_mode = session.current_prompt_mode.clone();
         let pending_interactions = session.pending_interactions.clone();
+        let status_runtime = session.status_runtime.clone();
         let session_for_hooks = session.clone();
         let mut user_question_rx = user_question_rx;
         tokio::task::spawn_local(async move {
@@ -1582,6 +1589,7 @@ pub(crate) async fn spawn_session_actor(
                     let _pending_guard =
                         crate::session::pending_interaction::PendingInteractionGuard::new(
                             pending_interactions.clone(),
+                            status_runtime.clone(),
                             gateway.clone(),
                             session_id.clone(),
                             tool_call_id.clone(),
@@ -1656,6 +1664,7 @@ pub(crate) async fn spawn_session_actor(
             hunk_tracker_handle,
             chat_state_handle: chat_state_handle_for_handle,
             signals_handle,
+            status_runtime,
             gateway_enabled,
             mcp_servers,
             initial_client_mcp_servers,

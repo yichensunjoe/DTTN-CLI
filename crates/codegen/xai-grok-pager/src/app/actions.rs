@@ -2285,6 +2285,8 @@ pub enum TaskResult {
     SessionAgentNameResolved {
         agent_id: AgentId,
         agent_name: Option<String>,
+        status_runtime:
+            Option<xai_grok_shell::session::status_runtime_snapshot::StatusRuntimeWireSnapshot>,
     },
     /// Authentication completed successfully.
     AuthComplete {

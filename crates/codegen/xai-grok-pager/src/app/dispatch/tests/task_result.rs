@@ -2257,3 +2257,41 @@ fn session_list_nonempty_partial_modal_toasts_in_chat_mode_only() {
         "Build-mode modal non-empty degraded list stays silent"
     );
 }
+
+#[test]
+fn session_info_bootstrap_applies_status_runtime_snapshot() {
+    use xai_grok_shell::session::status_runtime_snapshot::{
+        StatusRunState, StatusRuntimeWireSnapshot,
+    };
+
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let status = StatusRuntimeWireSnapshot {
+        revision: 3,
+        run_state: StatusRunState::Idle,
+        model_id: "company/model-a".into(),
+        context_window: 131_072,
+        session_input_tokens: 12_000,
+        session_output_tokens: 500,
+        ..Default::default()
+    };
+
+    dispatch_task_result(
+        TaskResult::SessionAgentNameResolved {
+            agent_id: id,
+            agent_name: Some("builder".into()),
+            status_runtime: Some(status),
+        },
+        &mut app,
+    );
+
+    let agent = &app.agents[&id];
+    assert_eq!(agent.session_agent_name.as_deref(), Some("builder"));
+    let runtime = agent
+        .status_runtime
+        .as_ref()
+        .expect("session/info status snapshot applied");
+    assert_eq!(runtime.revision, 3);
+    assert_eq!(runtime.model_id, "company/model-a");
+    assert_eq!(runtime.session_input_tokens, 12_000);
+}

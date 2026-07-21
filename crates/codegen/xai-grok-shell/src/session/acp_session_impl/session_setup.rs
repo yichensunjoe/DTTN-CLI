@@ -425,6 +425,15 @@ impl SessionActor {
             .map(|id| self.models_manager.model_show_model_fingerprint(id))
             .unwrap_or(false);
         let conversation_id = None;
+        let status_runtime =
+            crate::session::status_runtime_snapshot::StatusRuntimeWireSnapshot::from(
+                self.status_runtime.snapshot(),
+            );
+        crate::session::pending_interaction::ensure_status_runtime_bridge(
+            &self.status_runtime,
+            self.notifications.gateway.clone(),
+            self.session_info.id.clone(),
+        );
         SessionInfoData {
             model,
             model_display_name: None,
@@ -435,6 +444,7 @@ impl SessionActor {
             conversation_id,
             agent_name: Some(agent_name),
             turns: turns as u64,
+            status_runtime: Some(status_runtime),
             turn_index,
             context: ContextInfo {
                 used: total_tokens,

@@ -30,9 +30,28 @@ impl AgentView {
             self.last_seen_event_id = None;
             self.last_applied_event_seq = None;
             self.last_applied_xai_event_seq = None;
+            self.status_runtime = None;
+            self.status_runtime_render_cache = None;
         }
         self.session.session_id = Some(session_id);
     }
+    /// Apply a complete status-runtime generation if it is newer than the
+    /// generation already held by this view. Returns whether local state changed.
+    pub(crate) fn apply_status_runtime(
+        &mut self,
+        status: xai_grok_shell::session::status_runtime_snapshot::StatusRuntimeWireSnapshot,
+    ) -> bool {
+        if !crate::views::status_runtime::should_apply_revision(
+            self.status_runtime.as_ref().map(|current| current.revision),
+            status.revision,
+        ) {
+            return false;
+        }
+        self.status_runtime = Some(status);
+        self.status_runtime_render_cache = None;
+        true
+    }
+
     /// Record a prompt id this client originated (sent to the agent as the turn
     /// driver). Used by the ACP gate to keep `attached_as_viewer` per-turn
     /// accurate. Bounded FIFO; a no-op for ids already tracked.
@@ -91,6 +110,8 @@ impl AgentView {
             modal_buttons: Vec::new(),
             modal_hovered_key: None,
             context_state: None,
+            status_runtime: None,
+            status_runtime_render_cache: None,
             chat_kind: false,
             app_chat_mode: false,
             credit_balance: None,

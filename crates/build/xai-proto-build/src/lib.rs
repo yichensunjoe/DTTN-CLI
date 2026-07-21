@@ -1,6 +1,7 @@
 pub mod find_protoc;
 
 use anyhow::Context;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::{fs, iter};
@@ -28,6 +29,31 @@ fn find_protoc_include_dir(protoc: Option<&Path>) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+fn protoc_output_arg(flag: &str, path: &Path) -> OsString {
+    let mut arg = OsString::from(flag);
+    arg.push(path);
+    arg
+}
+
+fn parse_dependency_paths(output: &str) -> anyhow::Result<Vec<String>> {
+    let mut lines = output.lines();
+    let first_line = lines.next().context("protoc dependency output is empty")?;
+    // Protoc emits Makefile syntax: `<target>: <dependency>`. Splitting on
+    // `: ` rather than the first colon preserves Windows drive prefixes such
+    // as `C:\\...` in the target path.
+    let (_, first_dependency) = first_line
+        .split_once(": ")
+        .with_context(|| format!("protoc dependency output has no target separator: {output:?}"))?;
+
+    Ok(iter::once(first_dependency)
+        .chain(lines)
+        .map(str::trim)
+        .map(|line| line.strip_suffix('\\').unwrap_or(line).trim())
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 pub struct XaiProtoBuilder {
@@ -114,14 +140,18 @@ impl XaiProtoBuilder {
 
         // Can only process one input file when using --dependency_out=FILE.
         for proto in protos {
+            let output_dir =
+                tempfile::TempDir::new().context("create protoc dependency tempdir")?;
+            let dependency_path = output_dir.path().join("dependencies.d");
+            let descriptor_path = output_dir.path().join("descriptor.pb");
             let mut command = Command::new(protoc.unwrap_or(Path::new("protoc")));
             command
-                .arg("--dependency_out=/dev/stdout")
-                .arg("--descriptor_set_out=/dev/null");
+                .arg(protoc_output_arg("--dependency_out=", &dependency_path))
+                .arg(protoc_output_arg("--descriptor_set_out=", &descriptor_path));
 
             // Add protoc's well-known types include directory first (if found).
             // This is needed for Bazel sandboxed builds where protoc and its
-            // include files are in different locations.
+            // include files are in different sandbox locations.
             if let Some(include_dir) = protoc_include_dir {
                 command.arg(format!(
                     "-I{}",
@@ -134,27 +164,23 @@ impl XaiProtoBuilder {
             }
 
             command.arg(proto);
-
             command.stdin(Stdio::null());
+            command.stdout(Stdio::null());
             command.stderr(Stdio::inherit());
 
-            let output = command.output().context("protoc command failed")?;
-            if !output.status.success() {
+            let status = command.status().context("protoc command failed")?;
+            if !status.success() {
                 return Err(anyhow::anyhow!("protoc command failed"));
             }
 
-            let output =
-                String::from_utf8(output.stdout).context("protoc command output not UTF-8")?;
-
-            let mut lines = output.lines();
-            let first_line = lines.next().context("protoc command output is empty")?;
-            let prefix = "/dev/null:";
-            let rem = first_line.strip_prefix(prefix).with_context(|| {
-                format!("protoc command output must start with /dev/null: {output:?}")
+            let output = fs::read_to_string(&dependency_path).with_context(|| {
+                format!(
+                    "failed to read protoc dependency output {}",
+                    dependency_path.display()
+                )
             })?;
-            for line in iter::once(rem).chain(lines) {
-                let line = line.trim();
-                let line = line.strip_suffix("\\").unwrap_or(line);
+
+            for line in parse_dependency_paths(&output)? {
                 // Depending on absolute paths like
                 // /Users/user/homebrew/Cellar/protobuf/29.1/include/google/protobuf/timestamp.proto
                 // is valid, but we want to have output more deterministic.
@@ -162,7 +188,7 @@ impl XaiProtoBuilder {
                     continue;
                 }
 
-                if !fs::exists(line)? {
+                if !fs::exists(&line)? {
                     return Err(anyhow::anyhow!("dependency file not found: {line}"));
                 }
 
@@ -286,5 +312,28 @@ pub fn configure() -> XaiProtoBuilder {
         pbjson_ignore_unknown_fields: false,
         pbjson_preserve_proto_field_names: false,
         file_descriptor_set_path: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_dependency_paths;
+
+    #[test]
+    fn parses_unix_dependency_output() {
+        let paths = parse_dependency_paths(
+            "/tmp/descriptor.pb: proto/input.proto \\\n             proto/imported.proto\n",
+        )
+        .unwrap();
+        assert_eq!(paths, ["proto/input.proto", "proto/imported.proto"]);
+    }
+
+    #[test]
+    fn parses_windows_drive_target_without_splitting_the_drive_prefix() {
+        let paths = parse_dependency_paths(
+            "C:\\Temp\\descriptor.pb: proto\\input.proto \\\n             proto\\imported.proto\r\n",
+        )
+        .unwrap();
+        assert_eq!(paths, ["proto\\input.proto", "proto\\imported.proto"]);
     }
 }

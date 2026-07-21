@@ -17,10 +17,16 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::watch;
+
 use agent_client_protocol as acp;
 use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 
 use crate::extensions::notification::{SessionNotification, SessionUpdate as XaiSessionUpdate};
+use crate::session::status_runtime_snapshot::{
+    StatusRunState, StatusRuntimeNotification, StatusRuntimePublisher, StatusRuntimeSnapshot,
+    StatusRuntimeWireSnapshot,
+};
 
 /// Shared per-session map of open reverse-requests, keyed by `tool_call_id`.
 ///
@@ -76,6 +82,89 @@ fn broadcast(gateway: &GatewaySender, session_id: &acp::SessionId, update: XaiSe
     }
 }
 
+pub(crate) const STATUS_RUNTIME_NOTIFICATION_METHOD: &str = "x.ai/status_runtime";
+
+/// Start the one coalescing, non-blocking status notification bridge for a session.
+///
+/// The bridge is lazy: `x.ai/session/info` supplies the initial snapshot and
+/// claims this task for clients that need live updates. It exits when all
+/// publisher handles are dropped.
+pub(crate) fn ensure_status_runtime_bridge(
+    publisher: &StatusRuntimePublisher,
+    gateway: GatewaySender,
+    session_id: acp::SessionId,
+) {
+    if !publisher.claim_notification_bridge() {
+        return;
+    }
+    let receiver = publisher.subscribe();
+    tokio::task::spawn_local(run_status_runtime_bridge(receiver, gateway, session_id));
+}
+
+async fn run_status_runtime_bridge(
+    mut receiver: watch::Receiver<Arc<StatusRuntimeSnapshot>>,
+    gateway: GatewaySender,
+    session_id: acp::SessionId,
+) {
+    let mut last_revision = None;
+    loop {
+        let snapshot = receiver.borrow_and_update().clone();
+        let revision = snapshot.revision;
+        if last_revision.map_or(true, |last| revision > last) {
+            forward_status_snapshot(&gateway, &session_id, snapshot);
+            last_revision = Some(revision);
+        }
+        if receiver.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+fn forward_status_snapshot(
+    gateway: &GatewaySender,
+    session_id: &acp::SessionId,
+    snapshot: Arc<StatusRuntimeSnapshot>,
+) {
+    let notification = StatusRuntimeNotification {
+        session_id: session_id.clone(),
+        status: StatusRuntimeWireSnapshot::from(snapshot),
+    };
+    match serde_json::value::to_raw_value(&notification) {
+        Ok(params) => {
+            gateway.forward_fire_and_forget(acp::ExtNotification::new(
+                STATUS_RUNTIME_NOTIFICATION_METHOD,
+                params.into(),
+            ));
+        }
+        Err(error) => tracing::warn!(
+            session_id = %session_id.0,
+            %error,
+            "failed to serialize status runtime notification"
+        ),
+    }
+}
+
+fn publish_pending_status(status_runtime: &StatusRuntimePublisher, count: usize) {
+    let count = u32::try_from(count).unwrap_or(u32::MAX);
+    status_runtime.update(|snapshot| {
+        snapshot.pending_interactions = count;
+        if count > 0 {
+            if !matches!(
+                snapshot.run_state,
+                StatusRunState::Cancelling | StatusRunState::Failed
+            ) {
+                snapshot.run_state = StatusRunState::WaitingForInput;
+            }
+        } else if snapshot.run_state == StatusRunState::WaitingForInput {
+            snapshot.run_state = if snapshot.active_prompt_id.is_some() {
+                StatusRunState::Running
+            } else {
+                StatusRunState::Idle
+            };
+        }
+    });
+}
+
 /// RAII guard registering an open reverse-request for the lifetime of the
 /// parked oneshot.
 ///
@@ -87,6 +176,7 @@ fn broadcast(gateway: &GatewaySender, session_id: &acp::SessionId, update: XaiSe
 /// second drop / already-removed key is silent.
 pub struct PendingInteractionGuard {
     pending: PendingInteractions,
+    status_runtime: StatusRuntimePublisher,
     gateway: GatewaySender,
     session_id: acp::SessionId,
     tool_call_id: String,
@@ -96,15 +186,18 @@ impl PendingInteractionGuard {
     /// Register a pending interaction and broadcast `pending_interaction`.
     pub fn new(
         pending: PendingInteractions,
+        status_runtime: StatusRuntimePublisher,
         gateway: GatewaySender,
         session_id: acp::SessionId,
         tool_call_id: String,
         kind: PendingKind,
     ) -> Self {
-        {
+        let count = {
             let mut map = pending.lock().unwrap_or_else(|e| e.into_inner());
             map.insert(tool_call_id.clone(), kind);
-        }
+            map.len()
+        };
+        publish_pending_status(&status_runtime, count);
         broadcast(
             &gateway,
             &session_id,
@@ -115,6 +208,7 @@ impl PendingInteractionGuard {
         );
         Self {
             pending,
+            status_runtime,
             gateway,
             session_id,
             tool_call_id,
@@ -124,13 +218,16 @@ impl PendingInteractionGuard {
 
 impl Drop for PendingInteractionGuard {
     fn drop(&mut self) {
-        let removed = {
+        let removed_and_count = {
             let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            map.remove(&self.tool_call_id).is_some()
+            map.remove(&self.tool_call_id)
+                .is_some()
+                .then_some(map.len())
         };
         // First-answer-wins: only announce resolution if this guard actually
         // owned the live entry. An already-resolved id is a silent no-op.
-        if removed {
+        if let Some(count) = removed_and_count {
+            publish_pending_status(&self.status_runtime, count);
             broadcast(
                 &self.gateway,
                 &self.session_id,
@@ -150,16 +247,23 @@ mod tests {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
+    fn new_status() -> StatusRuntimePublisher {
+        StatusRuntimePublisher::new(StatusRuntimeSnapshot::default())
+    }
+
     #[test]
-    fn guard_inserts_then_removes() {
+    fn guard_inserts_then_removes_and_publishes_status() {
         let reg = new_registry();
+        let status = new_status();
+        status.begin_turn("turn-1");
         // No gateway round-trip is exercised here (broadcast is best-effort and
-        // a dead sender simply drops). We only assert the registry mutation.
+        // a dead sender simply drops). We only assert registry/status mutation.
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let gateway = GatewaySender::new(tx);
         {
             let _g = PendingInteractionGuard::new(
                 reg.clone(),
+                status.clone(),
                 gateway,
                 acp::SessionId::new("sess-1"),
                 "call-1".to_string(),
@@ -170,8 +274,36 @@ mod tests {
                 reg.lock().unwrap().get("call-1").copied(),
                 Some(PendingKind::Permission)
             );
+            let snapshot = status.snapshot();
+            assert_eq!(snapshot.pending_interactions, 1);
+            assert_eq!(snapshot.run_state, StatusRunState::WaitingForInput);
         }
         assert!(reg.lock().unwrap().is_empty());
+        let snapshot = status.snapshot();
+        assert_eq!(snapshot.pending_interactions, 0);
+        assert_eq!(snapshot.run_state, StatusRunState::Running);
+    }
+
+    #[test]
+    fn cancelling_state_is_not_overwritten_by_late_interaction_resolution() {
+        let reg = new_registry();
+        let status = new_status();
+        status.begin_turn("turn-1");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let gateway = GatewaySender::new(tx);
+        let guard = PendingInteractionGuard::new(
+            reg,
+            status.clone(),
+            gateway,
+            acp::SessionId::new("sess-1"),
+            "call-1".to_string(),
+            PendingKind::Question,
+        );
+        assert!(status.mark_cancelling("turn-1").is_some());
+        drop(guard);
+        let snapshot = status.snapshot();
+        assert_eq!(snapshot.pending_interactions, 0);
+        assert_eq!(snapshot.run_state, StatusRunState::Cancelling);
     }
 
     /// `has_parked_plan_approval` counts ONLY a parked plan-approval; other
@@ -226,5 +358,27 @@ mod tests {
             has_parked_plan_approval(&reg),
             "a poisoned lock must still surface the parked approval, not panic"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_bridge_exits_after_publishers_drop() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let publisher = new_status();
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                let gateway = GatewaySender::new(tx);
+                let receiver = publisher.subscribe();
+                let task = tokio::task::spawn_local(run_status_runtime_bridge(
+                    receiver,
+                    gateway,
+                    acp::SessionId::new("sess-bridge"),
+                ));
+                drop(publisher);
+                tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                    .await
+                    .expect("bridge exits when watch closes")
+                    .expect("bridge task does not panic");
+            })
+            .await;
     }
 }

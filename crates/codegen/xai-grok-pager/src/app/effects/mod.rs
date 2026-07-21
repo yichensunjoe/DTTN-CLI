@@ -2870,6 +2870,7 @@ pub(crate) fn execute(
                             TaskResult::SessionAgentNameResolved {
                                 agent_id,
                                 agent_name: info.data.agent_name,
+                                status_runtime: info.data.status_runtime,
                             }
                         }
                         Err(e) => {
@@ -2877,6 +2878,7 @@ pub(crate) fn execute(
                             TaskResult::SessionAgentNameResolved {
                                 agent_id,
                                 agent_name: None,
+                                status_runtime: None,
                             }
                         }
                     }

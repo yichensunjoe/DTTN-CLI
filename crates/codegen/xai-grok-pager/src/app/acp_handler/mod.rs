@@ -602,6 +602,7 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         "x.ai/session_notification" | "x.ai/session/update" => {
             handle_session_notification(notif, app)
         }
+        "x.ai/status_runtime" => handle_status_runtime(notif, app),
         "x.ai/follow_ups" => handle_follow_ups(notif, app),
         "x.ai/task_backgrounded" => handle_task_backgrounded(notif, app),
         "x.ai/task_completed" => handle_task_completed(notif, app),
@@ -627,6 +628,39 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         "x.ai/mcp/servers_updated" => handle_mcp_servers_updated(notif, app),
         _ => false,
     }
+}
+
+/// Apply a coalesced status-runtime generation to the matching root or child
+/// session. Revisions are monotonic per session; duplicate and stale payloads
+/// are ignored without forcing a redraw.
+fn handle_status_runtime(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
+    let Ok(payload) = serde_json::from_str::<
+        xai_grok_shell::session::status_runtime_snapshot::StatusRuntimeNotification,
+    >(notif.params.get()) else {
+        tracing::warn!("Failed to parse x.ai/status_runtime");
+        return false;
+    };
+
+    let Some(matched) = find_session_match(app, &payload.session_id) else {
+        return false;
+    };
+    let owner_id = matched.agent_id();
+    let is_active = is_matched_agent_active(app, owner_id);
+    let child_key = payload.session_id.0.as_ref();
+    let Some(owner) = app.agents.get_mut(&owner_id) else {
+        return false;
+    };
+    let target = match matched {
+        SessionMatch::Root(_) => owner,
+        SessionMatch::Child(_) => {
+            let Some(child) = owner.subagent_views.get_mut(child_key) else {
+                return false;
+            };
+            child.as_mut()
+        }
+    };
+
+    target.apply_status_runtime(payload.status) && is_active
 }
 
 /// Handle `x.ai/session/interjection` — the leader broadcasts this

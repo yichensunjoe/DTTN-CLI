@@ -64,6 +64,8 @@ pub struct SessionHandle {
     pub chat_state_handle: xai_chat_state::ChatStateHandle,
     /// Handle to session signals (used for completion tracking)
     pub signals_handle: super::signals::SessionSignalsHandle,
+    /// I/O-free immutable runtime state consumed by TUI status surfaces.
+    pub status_runtime: super::status_runtime_snapshot::StatusRuntimePublisher,
     /// Shared gate controlling whether the session actor forwards
     /// notifications to the client via the gateway. See
     /// [`SessionActor::gateway_enabled`] for details.
