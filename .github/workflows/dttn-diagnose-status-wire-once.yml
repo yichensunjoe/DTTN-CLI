@@ -1,0 +1,57 @@
+name: DTTN Diagnose Status Wire Once
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dttn-diagnose-status-wire-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-status-wire:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout head branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Apply staged implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^          H4sI/ { capture = 1 }
+            capture && /^          PATCH$/ { exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/dttn-apply-status-wire-once.yml > /tmp/status-wire.patch.gz.b64
+          base64 --decode /tmp/status-wire.patch.gz.b64 | gunzip > /tmp/status-wire.patch
+          git apply --check /tmp/status-wire.patch
+          git apply /tmp/status-wire.patch
+          rustfmt --edition 2024 --config skip_children=true \
+            crates/codegen/xai-grok-shell/src/session/status_runtime_snapshot.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_types.rs \
+            crates/codegen/xai-grok-shell/src/session/pending_interaction.rs \
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_setup.rs \
+            crates/codegen/xai-grok-shell/tests/status_runtime_snapshot_contract.rs
+
+      - name: Print compact failure diagnostics
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          set +e
+          cargo test -p xai-grok-shell --test status_runtime_snapshot_contract > /tmp/status-wire-test.log 2>&1
+          status=$?
+          tail -n 300 /tmp/status-wire-test.log
+          exit "$status"
