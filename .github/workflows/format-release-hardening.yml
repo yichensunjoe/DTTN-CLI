@@ -1,0 +1,42 @@
+name: Format release hardening
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Format changed Rust packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt \
+            -p xai-grok-version \
+            -p xai-grok-update \
+            -p xai-grok-pager-bin
+          if git diff --quiet -- \
+            crates/codegen/xai-grok-version \
+            crates/codegen/xai-grok-update \
+            crates/codegen/xai-grok-pager-bin; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            crates/codegen/xai-grok-version \
+            crates/codegen/xai-grok-update \
+            crates/codegen/xai-grok-pager-bin
+          git diff --cached --check
+          git commit -m 'style: format release hardening changes'
+          git push origin HEAD:${{ github.head_ref }}
