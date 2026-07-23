@@ -10,6 +10,10 @@ def main() -> None:
     start = source.index(marker) + len(marker)
     end = source.index("\n          PY\n", start)
     code = textwrap.dedent(source[start:end])
+    code = code.replace(
+        "crates/codegen/xai-grok-update crates/codegen/xai-grok-pager-bin/src/main.rs",
+        "crates/codegen/xai-grok-update/src crates/codegen/xai-grok-pager-bin/src/main.rs",
+    )
 
     brittle_start = code.index("update_arm = re.compile")
     brittle_end = code.index("main_path.write_text(main)", brittle_start)
