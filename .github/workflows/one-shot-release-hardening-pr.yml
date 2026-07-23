@@ -19,23 +19,37 @@ jobs:
           fetch-depth: 0
 
       - name: Execute embedded hardening patch
+        id: patch
         shell: bash
         run: |
           set -euo pipefail
           python3 <<'PY'
           from pathlib import Path
+          import os
           import textwrap
+          import traceback
 
-          source = Path('.github/workflows/one-shot-release-hardening.yml').read_text()
-          marker = "          python3 <<'PY'\n"
-          start = source.index(marker) + len(marker)
-          end = source.index("\n          PY\n", start)
-          code = textwrap.dedent(source[start:end])
-          exec(compile(code, 'release-hardening-embedded.py', 'exec'))
-          Path('.github/workflows/one-shot-release-hardening-pr.yml').unlink()
+          error_path = Path('.release-hardening-error.txt')
+          output_path = Path(os.environ['GITHUB_OUTPUT'])
+          if error_path.exists():
+              output_path.write_text('ok=false\n')
+          else:
+              try:
+                  source = Path('.github/workflows/one-shot-release-hardening.yml').read_text()
+                  marker = "          python3 <<'PY'\n"
+                  start = source.index(marker) + len(marker)
+                  end = source.index("\n          PY\n", start)
+                  code = textwrap.dedent(source[start:end])
+                  exec(compile(code, 'release-hardening-embedded.py', 'exec'))
+                  Path('.github/workflows/one-shot-release-hardening-pr.yml').unlink()
+                  output_path.write_text('ok=true\n')
+              except Exception:
+                  error_path.write_text(traceback.format_exc())
+                  output_path.write_text('ok=false\n')
           PY
 
       - name: Install build prerequisites
+        if: steps.patch.outputs.ok == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -43,6 +57,7 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Validate and update lockfile
+        if: steps.patch.outputs.ok == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -55,7 +70,8 @@ jobs:
           ! grep -R -n -E 'https://x\.ai/cli|storage\.googleapis\.com/grok-build-public-artifacts|@xai-official/grok|xai-org-shared/grok-build' \
             crates/codegen/xai-grok-update crates/codegen/xai-grok-pager-bin/src/main.rs
 
-      - name: Commit and push
+      - name: Commit successful patch
+        if: steps.patch.outputs.ok == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -65,3 +81,18 @@ jobs:
           git diff --cached --check
           git commit -m 'fix: harden alpha release and disable inherited updater'
           git push origin HEAD:${{ github.head_ref }}
+
+      - name: Persist patch error
+        if: steps.patch.outputs.ok == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .release-hardening-error.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'ci: capture release hardening patch failure'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+          cat .release-hardening-error.txt
+          exit 1
