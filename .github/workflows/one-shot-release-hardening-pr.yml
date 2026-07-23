@@ -43,7 +43,7 @@ jobs:
                   exec(compile(code, 'release-hardening-embedded.py', 'exec'))
                   Path('.github/workflows/one-shot-release-hardening-pr.yml').unlink()
                   output_path.write_text('ok=true\n')
-              except Exception:
+              except BaseException:
                   error_path.write_text(traceback.format_exc())
                   output_path.write_text('ok=false\n')
           PY
