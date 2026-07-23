@@ -22,7 +22,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/apply-release-hardening.py
+          if ! python3 scripts/apply-release-hardening.py; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add .release-hardening-error.txt
+            git commit -m 'ci: capture release hardening patch failure'
+            git push origin HEAD:${{ github.head_ref }}
+            cat .release-hardening-error.txt
+            exit 1
+          fi
 
       - name: Install build prerequisites
         shell: bash
