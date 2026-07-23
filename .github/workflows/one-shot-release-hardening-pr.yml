@@ -22,6 +22,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -f .release-hardening-validation.log ]]; then
+            cat .release-hardening-validation.log
+            exit 1
+          fi
           if ! python3 scripts/apply-release-hardening.py; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -40,19 +44,45 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Validate and update lockfile
+        id: validate
+        shell: bash
+        run: |
+          set +e
+          {
+            set -euo pipefail
+            cargo fmt --all -- --check
+            cargo check -p xai-grok-version
+            cargo check -p xai-grok-update
+            cargo check -p xai-grok-pager-bin --bin dttn
+            cargo check --locked -p xai-grok-version
+            grep -F 'version = "0.1.220-alpha.5"' crates/codegen/xai-grok-pager-bin/Cargo.toml
+            ! grep -R -n -E 'https://x\.ai/cli|storage\.googleapis\.com/grok-build-public-artifacts|@xai-official/grok|xai-org-shared/grok-build' \
+              crates/codegen/xai-grok-update crates/codegen/xai-grok-pager-bin/src/main.rs
+          } > >(tee .release-hardening-validation.log) 2>&1
+          status=$?
+          if [[ $status -eq 0 ]]; then
+            echo 'ok=true' >> "$GITHUB_OUTPUT"
+            rm -f .release-hardening-validation.log
+          else
+            echo 'ok=false' >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Persist validation failure
+        if: steps.validate.outputs.ok == 'false'
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all -- --check
-          cargo check -p xai-grok-version
-          cargo check -p xai-grok-update
-          cargo check -p xai-grok-pager-bin --bin dttn
-          cargo check --locked -p xai-grok-version
-          grep -F 'version = "0.1.220-alpha.5"' crates/codegen/xai-grok-pager-bin/Cargo.toml
-          ! grep -R -n -E 'https://x\.ai/cli|storage\.googleapis\.com/grok-build-public-artifacts|@xai-official/grok|xai-org-shared/grok-build' \
-            crates/codegen/xai-grok-update crates/codegen/xai-grok-pager-bin/src/main.rs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .release-hardening-validation.log
+          git commit -m 'ci: capture release hardening validation failure'
+          git push origin HEAD:${{ github.head_ref }}
+          cat .release-hardening-validation.log
+          exit 1
 
       - name: Commit and push
+        if: steps.validate.outputs.ok == 'true'
         shell: bash
         run: |
           set -euo pipefail
