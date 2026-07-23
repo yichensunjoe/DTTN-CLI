@@ -1,7 +1,0 @@
-Validated shipping targets in GitHub Actions run 30018636208:
-- scoped rustfmt passed
-- xai-grok-version cargo check passed
-- xai-grok-update cargo check passed
-- xai-grok-pager-bin dttn cargo check passed
-- Cargo.lock consistency check passed
-- forbidden runtime update-source gate passed

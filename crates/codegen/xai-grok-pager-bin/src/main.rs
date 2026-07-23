@@ -1002,7 +1002,7 @@ async fn run_agent_command(
     let is_leader = matches!(agent_args.mode, Some(AgentCmd::Leader(_)));
     if !is_stdio && !is_leader {
         eprintln!(
-            "Grok Build (pager) - v{}",
+            "DTTN - v{}",
             xai_grok_version::display_version_with_commit(
                 env!("VERSION_WITH_COMMIT"),
                 xai_grok_update::channel_label(),
@@ -1596,10 +1596,10 @@ fn main() {
     );
     raise_fd_limit();
     if let Err(e) = xai_grok_config::validate_requirements() {
-        eprintln!("Couldn't start Grok: {e}");
+        eprintln!("Couldn't start DTTN: {e}");
         eprintln!();
         eprintln!(
-            "Update Grok to a version the policy allows, or ask your administrator \
+            "Update DTTN to a version the policy allows, or ask your administrator \
              to fix the managed requirements."
         );
         std::process::exit(2);
@@ -1615,7 +1615,7 @@ fn main() {
     if xai_grok_shell::util::config::load_crash_handler_enabled_sync() {
         let crash_dir = xai_grok_shell::util::grok_home::grok_home().join("crash");
         if let Some(report) = xai_crash_handler::check_previous_crash(&crash_dir) {
-            eprintln!("Grok crashed during your last session.");
+            eprintln!("DTTN crashed during your last session.");
             eprintln!("  Signal:  {}", report.signal_name);
             eprintln!("  Version: {}", report.app_version);
             eprintln!("  Report:  {}", report.report_path.display());
@@ -1732,7 +1732,7 @@ async fn async_main() -> Result<()> {
                     println!("{}", serde_json::to_string(&payload)?);
                 } else {
                     println!(
-                        "grok {}",
+                        "dttn {}",
                         xai_grok_version::display_version_with_commit(
                             env!("VERSION_WITH_COMMIT"),
                             xai_grok_update::channel_label(),
@@ -1846,28 +1846,26 @@ async fn async_main() -> Result<()> {
             Command::Memory(memory_args) => {
                 return xai_grok_pager::memory_cmd::run(memory_args);
             }
-            Command::Update {
-                check,
-                json,
-                force_reinstall,
-                version,
-                alpha,
-                stable,
-                enterprise,
-            } => {
-                init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-                let channel_switch = get_channel_switch(alpha, stable, enterprise);
-                return run_update_command(
-                    check,
-                    json,
-                    force_reinstall,
-                    version,
-                    channel_switch,
-                    &update_config,
-                )
-                .await;
-            }
+            Command::Update { json, .. } => {
+        init_tracing_simple("cli");
+        let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "enabled": false,
+                    "channel": "alpha",
+                    "repository": "yichensunjoe/DTTN-CLI",
+                    "message": "DTTN self-update is not enabled in this alpha release. Install the latest version from the DTTN GitHub Release."
+                })
+            );
+        } else {
+            println!("DTTN self-update is not enabled in this alpha release.");
+            println!("Install the latest version from the DTTN GitHub Release:");
+            println!("  https://github.com/yichensunjoe/DTTN-CLI/releases");
+        }
+        return Ok(());
+    }
             Command::Login {
                 legacy: _,
                 provider,
