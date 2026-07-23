@@ -8,8 +8,10 @@ on:
       - '.github/workflows/dttn-windows-release.yml'
       - 'scripts/install-windows.ps1'
       - 'docs/windows.md'
+      - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      - '.cargo/**'
       - 'crates/build/xai-proto-build/**'
       - 'crates/codegen/xai-grok-pager-bin/**'
       - 'crates/codegen/xai-grok-pager/**'
@@ -29,6 +31,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   WINDOWS_ASSET_NAME: dttn-windows-x86_64
 
@@ -52,19 +55,55 @@ jobs:
           cargo --version
           protoc --version
 
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-x64-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            windows-x64-cargo-
+
       - name: Build release binary
+        id: build
+        continue-on-error: true
         shell: pwsh
         run: |
-          cargo build --locked --release `
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $logPath = Join-Path $env:RUNNER_TEMP 'dttn-windows-build.log'
+
+          & cargo build --locked --profile release-dist `
             -p xai-grok-pager-bin `
             --bin dttn `
-            --features release-dist
+            --features release-dist 2>&1 | Tee-Object -FilePath $logPath
+
+          $exitCode = $LASTEXITCODE
+          "exit_code=$exitCode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          exit $exitCode
+
+      - name: Upload Windows build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dttn-windows-build-log
+          path: ${{ runner.temp }}/dttn-windows-build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce successful release build
+        if: steps.build.outcome != 'success'
+        shell: pwsh
+        run: |
+          throw "Windows release build failed with exit code ${{ steps.build.outputs.exit_code }}. Download the dttn-windows-build-log artifact for the complete compiler output."
 
       - name: Smoke test binary
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & target\release\dttn.exe --help | Out-Null
+          & target\release-dist\dttn.exe --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             throw "dttn.exe --help failed with exit code $LASTEXITCODE"
           }
@@ -77,9 +116,10 @@ jobs:
           $packageRoot = Join-Path $PWD "dist\$assetName"
           New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 
-          Copy-Item target\release\dttn.exe $packageRoot
+          Copy-Item target\release-dist\dttn.exe $packageRoot
           Copy-Item README.md $packageRoot
           Copy-Item LICENSE $packageRoot
+          Copy-Item docs\windows.md (Join-Path $packageRoot 'WINDOWS.md')
 
           $archive = Join-Path $PWD "dist\$assetName.zip"
           Compress-Archive -Path "$packageRoot\*" -DestinationPath $archive -Force
@@ -104,6 +144,33 @@ jobs:
           & (Join-Path $installDir 'dttn.exe') --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             throw "Installed dttn.exe --help failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Reject a tampered archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tamperedArchive = Join-Path $env:RUNNER_TEMP 'dttn-tampered.zip'
+          Copy-Item "dist\$env:WINDOWS_ASSET_NAME.zip" $tamperedArchive
+          [IO.File]::AppendAllText($tamperedArchive, 'tampered')
+          $installDir = Join-Path $env:RUNNER_TEMP 'dttn-tampered-install\bin'
+
+          try {
+            & scripts\install-windows.ps1 `
+              -ArchivePath $tamperedArchive `
+              -ChecksumPath "dist\$env:WINDOWS_ASSET_NAME.zip.sha256" `
+              -InstallDir $installDir `
+              -NoPathUpdate
+            throw 'Installer unexpectedly accepted a tampered archive.'
+          }
+          catch {
+            if ($_.Exception.Message -notmatch 'SHA-256 verification failed') {
+              throw
+            }
+          }
+
+          if (Test-Path (Join-Path $installDir 'dttn.exe')) {
+            throw 'Installer wrote dttn.exe after checksum verification failed.'
           }
 
       - name: Upload Windows artifact
