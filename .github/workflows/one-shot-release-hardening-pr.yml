@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          {
+          (
             set -euo pipefail
             cargo fmt --all -- --check
             cargo check -p xai-grok-version
@@ -58,8 +58,8 @@ jobs:
             grep -F 'version = "0.1.220-alpha.5"' crates/codegen/xai-grok-pager-bin/Cargo.toml
             ! grep -R -n -E 'https://x\.ai/cli|storage\.googleapis\.com/grok-build-public-artifacts|@xai-official/grok|xai-org-shared/grok-build' \
               crates/codegen/xai-grok-update crates/codegen/xai-grok-pager-bin/src/main.rs
-          } > >(tee .release-hardening-validation.log) 2>&1
-          status=$?
+          ) 2>&1 | tee .release-hardening-validation.log
+          status=${PIPESTATUS[0]}
           if [[ $status -eq 0 ]]; then
             echo 'ok=true' >> "$GITHUB_OUTPUT"
             rm -f .release-hardening-validation.log
