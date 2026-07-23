@@ -1,0 +1,67 @@
+name: Apply release hardening on PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Execute embedded hardening patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/one-shot-release-hardening.yml').read_text()
+          marker = "          python3 <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("\n          PY\n", start)
+          code = textwrap.dedent(source[start:end])
+          exec(compile(code, 'release-hardening-embedded.py', 'exec'))
+          Path('.github/workflows/one-shot-release-hardening-pr.yml').unlink()
+          PY
+
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Validate and update lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo check -p xai-grok-version
+          cargo check -p xai-grok-update
+          cargo check -p xai-grok-pager-bin --bin dttn
+          cargo check --locked -p xai-grok-version
+          grep -F 'version = "0.1.220-alpha.5"' crates/codegen/xai-grok-pager-bin/Cargo.toml
+          ! grep -R -n -E 'https://x\.ai/cli|storage\.googleapis\.com/grok-build-public-artifacts|@xai-official/grok|xai-org-shared/grok-build' \
+            crates/codegen/xai-grok-update crates/codegen/xai-grok-pager-bin/src/main.rs
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: harden alpha release and disable inherited updater'
+          git push origin HEAD:${{ github.head_ref }}
