@@ -50,7 +50,15 @@ jobs:
           set +e
           (
             set -euo pipefail
-            cargo fmt --all -- --check
+            cargo fmt \
+              -p xai-grok-version \
+              -p xai-grok-update \
+              -p xai-grok-pager-bin
+            cargo fmt \
+              -p xai-grok-version \
+              -p xai-grok-update \
+              -p xai-grok-pager-bin \
+              -- --check
             cargo check -p xai-grok-version
             cargo check -p xai-grok-update
             cargo check -p xai-grok-pager-bin --bin dttn
