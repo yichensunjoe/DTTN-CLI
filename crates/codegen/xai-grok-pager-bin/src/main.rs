@@ -1772,6 +1772,9 @@ async fn async_main() -> Result<()> {
             Command::Config(config_args) => {
                 return xai_grok_pager::config_cmd::run(config_args);
             }
+            Command::Configure => {
+                return xai_grok_pager::configure_wizard::run_wizard();
+            }
             Command::Setup { json } => {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
@@ -1787,14 +1790,8 @@ async fn async_main() -> Result<()> {
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 return xai_grok_pager::plugin_cmd::run(plugin_args).await;
             }
-            Command::Models => {
-                init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-                let config = xai_grok_shell::config::load_effective_config_disk_only()
-                    .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-                let agent_config = AgentConfig::new_from_toml_cfg(&config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-                return xai_grok_pager::models::list_available_models(&agent_config).await;
+            Command::Models(models_args) => {
+                return xai_grok_pager::models::run(models_args);
             }
             Command::Leader(leader_args) => {
                 init_tracing_simple("cli");
@@ -1981,6 +1978,16 @@ async fn async_main() -> Result<()> {
         .await;
     }
     enforce_minimum_version_or_exit(&update_config).await;
+    // Bare-interactive launch gate: if no usable default model is configured,
+    // drop into the model-config wizard (zero models) or a quick picker (models
+    // exist but no default) instead of entering the TUI. Headless (`--single`)
+    // and named subcommands never reach here (excluded by `is_interactive`).
+    if is_interactive {
+        let proceed = xai_grok_pager::configure_wizard::ensure_model_for_launch()?;
+        if !proceed {
+            return Ok(());
+        }
+    }
     let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
     type UpdateWaitHandle = tokio::task::JoinHandle<std::io::Result<std::process::ExitStatus>>;
     let bg_update_wait: std::sync::Arc<tokio::sync::Mutex<Option<UpdateWaitHandle>>> =

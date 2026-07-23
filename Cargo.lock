@@ -1766,6 +1766,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
+name = "cliclack"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fd2a475e9dff35ddebd459b0523aab732572581f7fe53133edd20b3330a0ce6"
+dependencies = [
+ "console 0.16.1",
+ "indicatif",
+ "once_cell",
+ "strsim",
+ "textwrap",
+ "zeroize",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13282,6 +13296,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_complete",
+ "cliclack",
  "core-foundation",
  "criterion",
  "crossterm",
