@@ -1,18 +1,18 @@
-# DTTN-CLI 企业发行配置示例。
+# DTTN-CLI runtime config 示例。
 #
 # 保存到：
 #   macOS / Linux: $DTTN_HOME/config.toml 或 ~/.dttn/config.toml
 #   Windows:       $env:DTTN_HOME\config.toml
+#
+# 启动后运行 `dttn configure` 通过交互式向导添加模型，或使用
+# `dttn config models custom ...` 在 CI/脚本中注册模型。
 
 [models]
-default = "agnes-2.0-flash"
-web_search = "agnes-2.0-flash"
-image_description = "agnes-2.0-flash"
-session_summary = "agnes-2.0-flash"
+# 没有内置默认模型——用户必须先配置一个。
+web_search = ""
+image_description = ""
+session_summary = ""
 agent_type = "dttn-code-agent"
-
-# 限制交互式会话可选模型，防止用户绕过组织模型策略。
-allowed_models = ["agnes-2.0-flash"]
 
 # 推理请求的全局默认值。模型目录中的每模型配置可覆盖这些值。
 temperature = 0.7
@@ -21,13 +21,14 @@ max_retries = 3
 inference_idle_timeout_secs = 120
 
 [endpoints]
-# OpenAI Chat Completions 兼容的推理服务根地址。
-# Agnes 官方公共 API 使用 https://apihub.agnes-ai.com/v1；企业部署应替换为
-# 公司批准的网关或私有代理地址，避免在配置模板中硬编码第三方生产 Endpoint。
+# 未设置时使用每个模型各自的 base_url。
+# 设为 example.internal 避免把第三方生产 endpoint 硬编码在配置模板里。
 models_base_url = "https://models.example.internal/v1"
-
-# 模型目录接口。未设置时默认使用 `${models_base_url}/models`。
 models_list_url = "https://models.example.internal/v1/models"
+
+[auth]
+# 离线模式：认证钉死在 API-key 方式，永不弹浏览器登录。
+preferred_method = "api_key"
 
 [cli]
 # Leader 模式可复用长生命周期运行时并支持会话恢复。

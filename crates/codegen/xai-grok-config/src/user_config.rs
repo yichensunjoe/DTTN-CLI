@@ -96,6 +96,8 @@ pub enum UserConfigError {
         #[source]
         source: toml_edit::TomlError,
     },
+    #[error("model entry '{0}' is not configured — nothing to remove")]
+    RemoveModel(String),
     #[error("[models] in {path} is not a TOML table")]
     ModelsNotTable { path: PathBuf },
     #[error("[model] in {path} is not a TOML table")]
@@ -138,6 +140,41 @@ pub fn set_custom_model(
         model_ref,
         default_changed: config.set_default,
     })
+}
+
+/// Remove a configured `[model."provider/model"]` entry by its full ref
+/// (e.g. `moonshot/kimi-for-coding`).  Also clears `[models].default` when
+/// it matches.
+pub fn remove_user_model(model_ref: &str) -> Result<bool, UserConfigError> {
+    let path = user_config_path();
+    remove_user_model_at(&path, model_ref)
+}
+
+fn remove_user_model_at(path: &Path, model_ref: &str) -> Result<bool, UserConfigError> {
+    let mut document = load_document(path)?;
+    let Some(catalog) = document.get_mut("model").and_then(Item::as_table_like_mut) else {
+        return Err(UserConfigError::ModelCatalogNotTable {
+            path: path.to_path_buf(),
+        });
+    };
+    if catalog.get(model_ref).is_none() {
+        return Err(UserConfigError::RemoveModel(model_ref.to_owned()));
+    }
+    catalog.remove(model_ref);
+    // If the removed model was the default, clear the default.
+    let mut default_cleared = false;
+    if let Some(models) = document.get_mut("models").and_then(Item::as_table_like_mut) {
+        if models
+            .get("default")
+            .and_then(Item::as_str)
+            .is_some_and(|d| d == model_ref)
+        {
+            models.remove("default");
+            default_cleared = true;
+        }
+    }
+    write_document(path, &document)?;
+    Ok(default_cleared)
 }
 
 fn validate_model_id(model: &str) -> Result<&str, UserConfigError> {
