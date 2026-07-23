@@ -1,0 +1,253 @@
+name: DTTN Windows Release
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dttn-windows-release.yml'
+      - 'scripts/install-windows.ps1'
+      - 'docs/windows.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - 'crates/build/xai-proto-build/**'
+      - 'crates/codegen/xai-grok-pager-bin/**'
+      - 'crates/codegen/xai-grok-pager/**'
+      - 'crates/codegen/xai-grok-shell/**'
+      - 'crates/codegen/xai-grok-sandbox/**'
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: dttn-windows-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  WINDOWS_ASSET_NAME: dttn-windows-x86_64
+
+jobs:
+  build-windows-x64:
+    name: Build and package Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install protoc
+        shell: pwsh
+        run: choco install protoc --no-progress -y
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          rustc --version
+          cargo --version
+          protoc --version
+
+      - name: Restore Cargo cache
+        id: cargo_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-x64-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            windows-x64-cargo-
+
+      - name: Build release binary
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $logPath = Join-Path $env:RUNNER_TEMP 'dttn-windows-build.log'
+
+          & cargo build --locked --profile release-dist `
+            -p xai-grok-pager-bin `
+            --bin dttn `
+            --features release-dist 2>&1 | Tee-Object -FilePath $logPath
+
+          $exitCode = $LASTEXITCODE
+          "exit_code=$exitCode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          exit $exitCode
+
+      - name: Upload Windows build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dttn-windows-build-log
+          path: ${{ runner.temp }}/dttn-windows-build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Save Cargo cache
+        if: steps.build.outcome == 'success' && steps.cargo_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-x64-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
+
+      - name: Enforce successful release build
+        if: steps.build.outcome != 'success'
+        shell: pwsh
+        run: |
+          throw "Windows release build failed with exit code ${{ steps.build.outputs.exit_code }}. Download the dttn-windows-build-log artifact for the complete compiler output."
+
+      - name: Smoke test binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & target\release-dist\dttn.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "dttn.exe --help failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assetName = $env:WINDOWS_ASSET_NAME
+          $packageRoot = Join-Path $PWD "dist\$assetName"
+          New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+
+          Copy-Item target\release-dist\dttn.exe $packageRoot
+          Copy-Item README.md $packageRoot
+          Copy-Item LICENSE $packageRoot
+          Copy-Item docs\windows.md (Join-Path $packageRoot 'WINDOWS.md')
+
+          $archive = Join-Path $PWD "dist\$assetName.zip"
+          Compress-Archive -Path "$packageRoot\*" -DestinationPath $archive -Force
+
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+          "$hash  $assetName.zip" | Set-Content `
+            -Path (Join-Path $PWD "dist\$assetName.zip.sha256") `
+            -Encoding ascii `
+            -NoNewline
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.WINDOWS_ASSET_NAME }}
+          path: |
+            dist/${{ env.WINDOWS_ASSET_NAME }}.zip
+            dist/${{ env.WINDOWS_ASSET_NAME }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  test-windows-installer:
+    name: Test Windows installer
+    needs: build-windows-x64
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ env.WINDOWS_ASSET_NAME }}
+          path: dist
+
+      - name: Test PowerShell installer offline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Join-Path $env:RUNNER_TEMP 'dttn-install\bin'
+
+          1..2 | ForEach-Object {
+            & scripts\install-windows.ps1 `
+              -ArchivePath "dist\$env:WINDOWS_ASSET_NAME.zip" `
+              -ChecksumPath "dist\$env:WINDOWS_ASSET_NAME.zip.sha256" `
+              -InstallDir $installDir `
+              -NoPathUpdate
+          }
+
+          & (Join-Path $installDir 'dttn.exe') --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed dttn.exe --help failed with exit code $LASTEXITCODE"
+          }
+
+          $stagedFiles = @(Get-ChildItem -LiteralPath $installDir -Filter 'dttn.install-*.exe' -File -ErrorAction SilentlyContinue)
+          if ($stagedFiles.Count -ne 0) {
+            throw "Installer left $($stagedFiles.Count) staged executable(s) behind."
+          }
+
+      - name: Reject a tampered archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tamperedArchive = Join-Path $env:RUNNER_TEMP 'dttn-tampered.zip'
+          Copy-Item "dist\$env:WINDOWS_ASSET_NAME.zip" $tamperedArchive
+          [IO.File]::AppendAllText($tamperedArchive, 'tampered')
+          $installDir = Join-Path $env:RUNNER_TEMP 'dttn-tampered-install\bin'
+
+          try {
+            & scripts\install-windows.ps1 `
+              -ArchivePath $tamperedArchive `
+              -ChecksumPath "dist\$env:WINDOWS_ASSET_NAME.zip.sha256" `
+              -InstallDir $installDir `
+              -NoPathUpdate
+            throw 'Installer unexpectedly accepted a tampered archive.'
+          }
+          catch {
+            if ($_.Exception.Message -notmatch 'SHA-256 verification failed') {
+              throw
+            }
+          }
+
+          if (Test-Path (Join-Path $installDir 'dttn.exe')) {
+            throw 'Installer wrote dttn.exe after checksum verification failed.'
+          }
+
+  publish-release:
+    name: Publish tagged Windows release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-windows-x64
+      - test-windows-installer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ env.WINDOWS_ASSET_NAME }}
+          path: dist
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DTTN $TAG_NAME" \
+              --generate-notes
+          fi
+          gh release upload "$TAG_NAME" \
+            "dist/${WINDOWS_ASSET_NAME}.zip" \
+            "dist/${WINDOWS_ASSET_NAME}.zip.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
