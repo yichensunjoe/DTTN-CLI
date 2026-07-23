@@ -8,7 +8,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use toml_edit::DocumentMut;
 
-use xai_grok_config::user_config::{set_user_default_model, user_config_path, user_default_model};
+use xai_grok_config::user_config::{
+    remove_user_model, set_user_default_model, user_config_path, user_default_model,
+};
 
 #[derive(Debug, Clone, Args)]
 pub struct ModelsArgs {
@@ -32,6 +34,11 @@ pub enum ModelsCommand {
         /// Model reference in `provider/model` form.
         model: String,
     },
+    /// Remove a configured model (cannot remove the model currently in use)
+    Remove {
+        /// Model reference in `provider/model` form.
+        model: String,
+    },
 }
 
 pub fn run(args: ModelsArgs) -> Result<()> {
@@ -41,6 +48,7 @@ pub fn run(args: ModelsArgs) -> Result<()> {
     }) {
         ModelsCommand::List { json, plain } => list(json, plain),
         ModelsCommand::Set { model } => set(model),
+        ModelsCommand::Remove { model } => remove(model),
     }
 }
 
@@ -117,6 +125,19 @@ fn set(model: String) -> Result<()> {
     println!("Default model set to {model}.");
     println!("Config file: {}", path.display());
     println!("Applies to new sessions; resumed sessions keep their frozen model.");
+    Ok(())
+}
+
+fn remove(model: String) -> Result<()> {
+    let default_cleared = remove_user_model(&model)
+        .with_context(|| format!("failed to remove model '{model}'"))?;
+    println!("Removed model {model}.");
+    if default_cleared {
+        println!(
+            "It was the default model — default has been cleared. \
+             Run `dttn models set <ref>` to choose a new default."
+        );
+    }
     Ok(())
 }
 
