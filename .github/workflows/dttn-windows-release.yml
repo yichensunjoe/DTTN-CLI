@@ -1,0 +1,150 @@
+name: DTTN Windows Release
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dttn-windows-release.yml'
+      - 'scripts/install-windows.ps1'
+      - 'docs/windows.md'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'crates/build/xai-proto-build/**'
+      - 'crates/codegen/xai-grok-pager-bin/**'
+      - 'crates/codegen/xai-grok-pager/**'
+      - 'crates/codegen/xai-grok-shell/**'
+      - 'crates/codegen/xai-grok-sandbox/**'
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: dttn-windows-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  WINDOWS_ASSET_NAME: dttn-windows-x86_64
+
+jobs:
+  build-windows-x64:
+    name: Build and smoke test Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install protoc
+        shell: pwsh
+        run: choco install protoc --no-progress -y
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          rustc --version
+          cargo --version
+          protoc --version
+
+      - name: Build release binary
+        shell: pwsh
+        run: |
+          cargo build --locked --release `
+            -p xai-grok-pager-bin `
+            --bin dttn `
+            --features release-dist
+
+      - name: Smoke test binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & target\release\dttn.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "dttn.exe --help failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assetName = $env:WINDOWS_ASSET_NAME
+          $packageRoot = Join-Path $PWD "dist\$assetName"
+          New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+
+          Copy-Item target\release\dttn.exe $packageRoot
+          Copy-Item README.md $packageRoot
+          Copy-Item LICENSE $packageRoot
+
+          $archive = Join-Path $PWD "dist\$assetName.zip"
+          Compress-Archive -Path "$packageRoot\*" -DestinationPath $archive -Force
+
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+          "$hash  $assetName.zip" | Set-Content `
+            -Path (Join-Path $PWD "dist\$assetName.zip.sha256") `
+            -Encoding ascii `
+            -NoNewline
+
+      - name: Test PowerShell installer offline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Join-Path $env:RUNNER_TEMP 'dttn-install\bin'
+          & scripts\install-windows.ps1 `
+            -ArchivePath "dist\$env:WINDOWS_ASSET_NAME.zip" `
+            -ChecksumPath "dist\$env:WINDOWS_ASSET_NAME.zip.sha256" `
+            -InstallDir $installDir `
+            -NoPathUpdate
+
+          & (Join-Path $installDir 'dttn.exe') --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed dttn.exe --help failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.WINDOWS_ASSET_NAME }}
+          path: |
+            dist/${{ env.WINDOWS_ASSET_NAME }}.zip
+            dist/${{ env.WINDOWS_ASSET_NAME }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish tagged Windows release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows-x64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ env.WINDOWS_ASSET_NAME }}
+          path: dist
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DTTN $TAG_NAME" \
+              --generate-notes
+          fi
+          gh release upload "$TAG_NAME" \
+            "dist/${WINDOWS_ASSET_NAME}.zip" \
+            "dist/${WINDOWS_ASSET_NAME}.zip.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
