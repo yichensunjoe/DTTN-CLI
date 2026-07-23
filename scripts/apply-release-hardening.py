@@ -1,5 +1,6 @@
 from pathlib import Path
 import textwrap
+import traceback
 
 
 def main() -> None:
@@ -49,4 +50,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        Path(".release-hardening-error.txt").write_text(traceback.format_exc())
+        raise
