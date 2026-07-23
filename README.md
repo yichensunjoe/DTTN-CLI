@@ -56,8 +56,15 @@ cargo fmt --all
 Release 二进制输出：
 
 ```text
-target/release/dttn
+target/release/dttn       # macOS / Linux
+target/release/dttn.exe   # Windows
 ```
+
+## Windows x64
+
+Windows 版本通过独立流水线生成 `dttn-windows-x86_64.zip` 和 SHA-256 校验文件。仓库提供无管理员权限的 PowerShell 安装器，并在 CI 中验证编译、二进制启动、压缩包校验和离线安装全过程。
+
+完整安装、源码构建、卸载步骤和当前安全边界见 [`docs/windows.md`](docs/windows.md)。Windows 上现有 `sandbox-enforce` 功能尚无内核级后端，运行外部命令时应按未沙箱隔离处理。
 
 ## 运行模式
 
