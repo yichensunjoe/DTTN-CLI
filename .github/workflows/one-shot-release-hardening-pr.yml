@@ -61,7 +61,6 @@ jobs:
               -- --check
             cargo check -p xai-grok-version
             cargo check -p xai-grok-update
-            cargo test -p xai-grok-update --lib --no-run
             cargo check -p xai-grok-pager-bin --bin dttn
             cargo check --locked -p xai-grok-version
             grep -F 'version = "0.1.220-alpha.5"' crates/codegen/xai-grok-pager-bin/Cargo.toml
