@@ -20,6 +20,7 @@ mod macos_managed;
 mod managed_cache;
 pub mod model_providers;
 mod paths;
+pub mod provider_oauth;
 pub mod shell;
 pub mod signed_policy;
 pub mod user_config;

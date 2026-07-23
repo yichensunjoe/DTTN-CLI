@@ -217,17 +217,38 @@ fn prompt_one_model(is_first: bool) -> Result<String> {
         })
         .interact()?;
 
-    // 5. API key (plaintext, written to the entry under `api_key`).
-    let api_key: String = password("API key")
-        .mask('•')
-        .validate(|s: &String| {
-            if s.trim().is_empty() {
-                Err("API key is required".to_string())
-            } else {
-                Ok(())
-            }
-        })
-        .interact()?;
+    // 5. Auth method & API key (OAuth or plaintext API key).
+    let provider_is_moonshot = chosen
+        .map(|p| p.id == "moonshot" || p.id == "kimi")
+        .unwrap_or_else(|| {
+            let lower_url = base_url.to_lowercase();
+            let lower_model = model_id.to_lowercase();
+            lower_url.contains("moonshot") || lower_url.contains("kimi") || lower_model.contains("kimi")
+        });
+
+    let auth_mode: &str = if provider_is_moonshot {
+        select("Authentication method")
+            .item("oauth", "OAuth 2.0 (Login via Kimi Browser / Device Flow)", "Recommended - login with Kimi account")
+            .item("apikey", "API key (sk-...)", "Manual API key entry")
+            .interact()?
+    } else {
+        "apikey"
+    };
+
+    let api_key: String = if auth_mode == "oauth" {
+        perform_kimi_oauth_flow()?
+    } else {
+        password("API key")
+            .mask('•')
+            .validate(|s: &String| {
+                if s.trim().is_empty() {
+                    Err("API key is required".to_string())
+                } else {
+                    Ok(())
+                }
+            })
+            .interact()?
+    };
 
     // 6. Context window.
     let context_window: u64 = input("Context window (tokens)")
@@ -325,3 +346,58 @@ fn derive_provider_id(base_url: &str) -> String {
     }
     s
 }
+
+fn block_on_async<F: std::future::Future>(future: F) -> F::Output {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(future))
+    } else {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to initialize async runtime for OAuth");
+        rt.block_on(future)
+    }
+}
+
+pub fn perform_kimi_oauth_flow() -> Result<String> {
+    use xai_grok_config::provider_oauth::{save_oauth_credential, KimiOAuthClient};
+
+    let device_auth = block_on_async(KimiOAuthClient::request_device_authorization())
+        .map_err(|e| anyhow::anyhow!("Kimi OAuth authorization request failed: {e}"))?;
+
+    note(
+        "Kimi OAuth Authorization",
+        format!(
+            "Please open this URL in your browser:\n  {}\n\nVerification Code: {}\n",
+            device_auth.verification_uri_complete, device_auth.user_code
+        ),
+    )?;
+
+    let _ = webbrowser::open(&device_auth.verification_uri_complete);
+
+    let spinner = cliclack::spinner();
+    spinner.start("Waiting for Kimi login authorization in browser...");
+
+    let cred_result = block_on_async(KimiOAuthClient::poll_for_token(
+        &device_auth.device_code,
+        device_auth.interval_ms,
+        device_auth.expires_in_ms,
+        || {},
+    ));
+
+    match cred_result {
+        Ok(cred) => {
+            spinner.stop("Authorization successful!");
+            save_oauth_credential("kimi", &cred)
+                .map_err(|e| anyhow::anyhow!("Failed to save credential: {e}"))?;
+            save_oauth_credential("moonshot", &cred)
+                .map_err(|e| anyhow::anyhow!("Failed to save credential: {e}"))?;
+            Ok(cred.access)
+        }
+        Err(e) => {
+            spinner.stop("Authorization failed or timed out.");
+            bail!("Kimi OAuth error: {}", e);
+        }
+    }
+}
+

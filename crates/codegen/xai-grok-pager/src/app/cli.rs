@@ -28,6 +28,9 @@ pub enum Command {
         /// Ignored (kept for backwards compatibility). OAuth2 is now the only auth method.
         #[arg(long, hide = true)]
         legacy: bool,
+        /// Provider name to authenticate with (e.g., `kimi` or `moonshot`).
+        #[arg(long = "provider")]
+        provider: Option<String>,
         /// Use Grok OAuth via auth.x.ai.
         #[arg(long = "oauth", alias = "oidc", conflicts_with_all = ["device_auth"])]
         oauth: bool,

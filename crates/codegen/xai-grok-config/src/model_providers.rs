@@ -60,7 +60,7 @@ pub const MODEL_PROVIDERS: &[ModelProviderDescriptor] = &[
         name: "Moonshot AI (Kimi + Kimi Coding)",
         description: "Moonshot and Kimi coding models",
         auth_env: &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
-        default_base_url: None,
+        default_base_url: Some("https://api.moonshot.cn/v1"),
         api_style: "openai-compatible",
         local: false,
     },

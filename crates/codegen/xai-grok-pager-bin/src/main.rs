@@ -1870,10 +1870,23 @@ async fn async_main() -> Result<()> {
             }
             Command::Login {
                 legacy: _,
+                provider,
                 oauth,
                 device_auth,
                 devbox,
             } => {
+                if let Some(ref p) = provider {
+                    match p.to_lowercase().as_str() {
+                        "kimi" | "moonshot" => {
+                            let _token = xai_grok_pager::configure_wizard::perform_kimi_oauth_flow()?;
+                            println!("Logged in to Kimi successfully! Access token saved.");
+                            return Ok(());
+                        }
+                        other => {
+                            anyhow::bail!("Unsupported provider for login: {}", other);
+                        }
+                    }
+                }
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let config = xai_grok_shell::config::load_effective_config_disk_only()

@@ -132,6 +132,7 @@ git2 = { version = "0.20", default-features = false, features = [
     "vendored-libgit2",
 ] }
 urlencoding = { workspace = true }
+webbrowser = { workspace = true }
 
 # Parsing (web_search)
 url = { workspace = true }
