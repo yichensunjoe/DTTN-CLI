@@ -18,69 +18,13 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
-      - name: Execute embedded hardening patch
-        id: patch
+      - name: Apply release hardening patch
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY'
-          from pathlib import Path
-          import os
-          import textwrap
-          import traceback
-
-          error_path = Path('.release-hardening-error.txt')
-          output_path = Path(os.environ['GITHUB_OUTPUT'])
-          if error_path.exists():
-              output_path.write_text('ok=false\n')
-          else:
-              try:
-                  source = Path('.github/workflows/one-shot-release-hardening.yml').read_text()
-                  marker = "          python3 <<'PY'\n"
-                  start = source.index(marker) + len(marker)
-                  end = source.index("\n          PY\n", start)
-                  code = textwrap.dedent(source[start:end])
-
-                  brittle_start = code.index('update_arm = re.compile')
-                  brittle_end = code.index('main_path.write_text(main)', brittle_start)
-                  robust_patch = r'''
-          update_start = main.index("            Command::Update {")
-          update_end_marker = "            Command::Login {"
-          update_end = main.index(update_end_marker, update_start)
-          replacement_arm = '''            Command::Update { json, .. } => {
-                  init_tracing_simple("cli");
-                  let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-                  if json {
-                      println!(
-                          "{}",
-                          serde_json::json!({
-                              "enabled": false,
-                              "channel": "alpha",
-                              "repository": "yichensunjoe/DTTN-CLI",
-                              "message": "DTTN self-update is not enabled in this alpha release. Install the latest version from the DTTN GitHub Release."
-                          })
-                      );
-                  } else {
-                      println!("DTTN self-update is not enabled in this alpha release.");
-                      println!("Install the latest version from the DTTN GitHub Release:");
-                      println!("  https://github.com/yichensunjoe/DTTN-CLI/releases");
-                  }
-                  return Ok(());
-              }
-'''
-          main = main[:update_start] + replacement_arm + main[update_end:]
-          '''
-                  code = code[:brittle_start] + textwrap.dedent(robust_patch) + code[brittle_end:]
-                  exec(compile(code, 'release-hardening-embedded.py', 'exec'))
-                  Path('.github/workflows/one-shot-release-hardening-pr.yml').unlink()
-                  output_path.write_text('ok=true\n')
-              except BaseException:
-                  error_path.write_text(traceback.format_exc())
-                  output_path.write_text('ok=false\n')
-          PY
+          python3 scripts/apply-release-hardening.py
 
       - name: Install build prerequisites
-        if: steps.patch.outputs.ok == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -88,7 +32,6 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Validate and update lockfile
-        if: steps.patch.outputs.ok == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -101,8 +44,7 @@ jobs:
           ! grep -R -n -E 'https://x\.ai/cli|storage\.googleapis\.com/grok-build-public-artifacts|@xai-official/grok|xai-org-shared/grok-build' \
             crates/codegen/xai-grok-update crates/codegen/xai-grok-pager-bin/src/main.rs
 
-      - name: Commit successful patch
-        if: steps.patch.outputs.ok == 'true'
+      - name: Commit and push
         shell: bash
         run: |
           set -euo pipefail
@@ -112,18 +54,3 @@ jobs:
           git diff --cached --check
           git commit -m 'fix: harden alpha release and disable inherited updater'
           git push origin HEAD:${{ github.head_ref }}
-
-      - name: Persist patch error
-        if: steps.patch.outputs.ok == 'false'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .release-hardening-error.txt
-          if ! git diff --cached --quiet; then
-            git commit -m 'ci: capture release hardening patch failure'
-            git push origin HEAD:${{ github.head_ref }}
-          fi
-          cat .release-hardening-error.txt
-          exit 1
