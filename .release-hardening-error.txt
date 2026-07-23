@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "<stdin>", line 17, in <module>
-  File "release-hardening-embedded.py", line 175, in <module>
-SystemExit: main.rs: expected to replace one update arm, replaced 0
