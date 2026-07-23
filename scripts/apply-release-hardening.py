@@ -42,6 +42,10 @@ def main() -> None:
         main = main[:update_start] + replacement_arm + main[update_end:]
         """
     )
+    robust_patch = "\n".join(
+        line[8:] if line.startswith("        ") else line
+        for line in robust_patch.splitlines()
+    ).lstrip() + "\n"
     code = code[:brittle_start] + robust_patch + code[brittle_end:]
     exec(compile(code, "release-hardening-embedded.py", "exec"), {})
 
