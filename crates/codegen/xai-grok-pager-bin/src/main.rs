@@ -1847,25 +1847,25 @@ async fn async_main() -> Result<()> {
                 return xai_grok_pager::memory_cmd::run(memory_args);
             }
             Command::Update { json, .. } => {
-        init_tracing_simple("cli");
-        let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "enabled": false,
-                    "channel": "alpha",
-                    "repository": "yichensunjoe/DTTN-CLI",
-                    "message": "DTTN self-update is not enabled in this alpha release. Install the latest version from the DTTN GitHub Release."
-                })
-            );
-        } else {
-            println!("DTTN self-update is not enabled in this alpha release.");
-            println!("Install the latest version from the DTTN GitHub Release:");
-            println!("  https://github.com/yichensunjoe/DTTN-CLI/releases");
-        }
-        return Ok(());
-    }
+                init_tracing_simple("cli");
+                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "enabled": false,
+                            "channel": "alpha",
+                            "repository": "yichensunjoe/DTTN-CLI",
+                            "message": "DTTN self-update is not enabled in this alpha release. Install the latest version from the DTTN GitHub Release."
+                        })
+                    );
+                } else {
+                    println!("DTTN self-update is not enabled in this alpha release.");
+                    println!("Install the latest version from the DTTN GitHub Release:");
+                    println!("  https://github.com/yichensunjoe/DTTN-CLI/releases");
+                }
+                return Ok(());
+            }
             Command::Login {
                 legacy: _,
                 provider,
@@ -1876,7 +1876,8 @@ async fn async_main() -> Result<()> {
                 if let Some(ref p) = provider {
                     match p.to_lowercase().as_str() {
                         "kimi" | "moonshot" => {
-                            let _token = xai_grok_pager::configure_wizard::perform_kimi_oauth_flow()?;
+                            let _token =
+                                xai_grok_pager::configure_wizard::perform_kimi_oauth_flow()?;
                             println!("Logged in to Kimi successfully! Access token saved.");
                             return Ok(());
                         }

@@ -65,10 +65,7 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
     }
 
     if let Some(error) = status.error.as_deref() {
-        println!(
-            "DTTN - v{} [{}]",
-            status.current_version, status.channel
-        );
+        println!("DTTN - v{} [{}]", status.current_version, status.channel);
         println!("Update check failed: {error}");
         return Ok(());
     }
@@ -3210,10 +3207,7 @@ mod tests {
     fn test_reinstall_hint_npm_mentions_npm_command() {
         let hint = reinstall_hint("npm");
         assert!(hint.contains("npm i -g"), "should suggest npm i -g: {hint}");
-        assert!(
-            hint.contains("DTTN-CLI"),
-            "should name the package: {hint}"
-        );
+        assert!(hint.contains("DTTN-CLI"), "should name the package: {hint}");
     }
 
     #[test]

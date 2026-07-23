@@ -15,8 +15,7 @@ pub const GH_RELEASE_REPO: &str = "yichensunjoe/DTTN-CLI";
 
 /// Primary CLI base URL: Cloudflare-fronted x.ai endpoint with edge caching
 /// for binaries and origin-respecting no-cache for channel pointers.
-pub(crate) const CLI_BASE_URL_PRIMARY: &str =
-    "https://github.com/yichensunjoe/DTTN-CLI/releases";
+pub(crate) const CLI_BASE_URL_PRIMARY: &str = "https://github.com/yichensunjoe/DTTN-CLI/releases";
 
 /// Fallback CLI base URL: direct GCS, used when the primary is unreachable
 /// (Cloudflare outage, regional CF egress issue, DNS hijack, etc.).
