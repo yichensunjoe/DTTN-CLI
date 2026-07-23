@@ -1,0 +1,347 @@
+info: syncing channel updates for 1.92.0-x86_64-unknown-linux-gnu
+info: latest update on 2025-12-11 for version 1.92.0 (ded5c06cf 2025-12-08)
+info: downloading 7 components
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/paths.rs:331:
+     fn dttn_application_uses_product_binary_name() {
+         let app = dttn_application();
+         let expected = if cfg!(windows) { "dttn.exe" } else { "dttn" };
+-        assert_eq!(app.file_name().and_then(|name| name.to_str()), Some(expected));
++        assert_eq!(
++            app.file_name().and_then(|name| name.to_str()),
++            Some(expected)
++        );
+     }
+ 
+     #[test]
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:1:
+ //! OAuth 2.0 Device Flow & Token Management for LLM Providers (e.g. Kimi).
+ 
++use serde::{Deserialize, Serialize};
+ use std::fs;
+ use std::path::PathBuf;
+ use std::time::{Duration, SystemTime, UNIX_EPOCH};
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:6:
+-use serde::{Deserialize, Serialize};
+ use tracing::info;
+ 
+ const KIMI_CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:93:
+         headers.insert("X-Msh-Version", KIMI_CLI_VERSION.parse().unwrap());
+         headers.insert(
+             "X-Msh-Device-Name",
+-            gethostname::gethostname().to_string_lossy().parse().unwrap(),
++            gethostname::gethostname()
++                .to_string_lossy()
++                .parse()
++                .unwrap(),
+         );
+         headers.insert(
+             "X-Msh-Device-Model",
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:100:
+-            format!("{} {}", std::env::consts::OS, std::env::consts::ARCH).parse().unwrap(),
++            format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)
++                .parse()
++                .unwrap(),
+         );
+         headers.insert("X-Msh-Os-Version", std::env::consts::OS.parse().unwrap());
+         headers.insert("X-Msh-Device-Id", Self::device_id().parse().unwrap());
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:209:
+                             "slow_down" => {
+                                 poll_interval += Duration::from_secs(5);
+                             }
+-                            "expired_token" => return Err("Kimi device authorization code expired".to_string()),
+-                            "access_denied" => return Err("Kimi device authorization access denied by user".to_string()),
+-                            other => return Err(format!("Kimi device flow error: {} - {}", other, raw.error_description.unwrap_or_default())),
++                            "expired_token" => {
++                                return Err("Kimi device authorization code expired".to_string());
++                            }
++                            "access_denied" => {
++                                return Err(
++                                    "Kimi device authorization access denied by user".to_string()
++                                );
++                            }
++                            other => {
++                                return Err(format!(
++                                    "Kimi device flow error: {} - {}",
++                                    other,
++                                    raw.error_description.unwrap_or_default()
++                                ));
++                            }
+                         }
+                     }
+                 }
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:249:
+             .await
+             .map_err(|e| format!("Failed to parse token response: {}", e))?;
+ 
+-        let access = raw.access_token.ok_or("Missing access_token in refresh response")?;
+-        let refresh = raw.refresh_token.unwrap_or_else(|| refresh_token.to_string());
++        let access = raw
++            .access_token
++            .ok_or("Missing access_token in refresh response")?;
++        let refresh = raw
++            .refresh_token
++            .unwrap_or_else(|| refresh_token.to_string());
+         let expires_in_sec = raw.expires_in.unwrap_or(86400);
+         let now_ms = SystemTime::now()
+             .duration_since(UNIX_EPOCH)
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:279:
+     }
+     let data = serde_json::to_string_pretty(cred).map_err(|e| e.to_string())?;
+     fs::write(&path, data).map_err(|e| e.to_string())?;
+-    info!("Saved OAuth credentials for provider '{}' to {:?}", provider, path);
++    info!(
++        "Saved OAuth credentials for provider '{}' to {:?}",
++        provider, path
++    );
+     Ok(())
+ }
+ 
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:290:
+ }
+ 
+ pub async fn get_or_refresh_valid_token(provider: &str) -> Result<String, String> {
+-    let mut cred = load_oauth_credential(provider)
+-        .ok_or_else(|| format!("No OAuth credential found for provider '{}'. Run 'dttn login --provider {}'", provider, provider))?;
++    let mut cred = load_oauth_credential(provider).ok_or_else(|| {
++        format!(
++            "No OAuth credential found for provider '{}'. Run 'dttn login --provider {}'",
++            provider, provider
++        )
++    })?;
+ 
+     if cred.is_expired() {
+-        info!("OAuth token for provider '{}' is expired/expiring soon, refreshing...", provider);
++        info!(
++            "OAuth token for provider '{}' is expired/expiring soon, refreshing...",
++            provider
++        );
+         match provider {
+             "kimi" | "moonshot" => {
+                 let fresh = KimiOAuthClient::refresh_token(&cred.refresh).await?;
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:301:
+                 cred = fresh;
+                 save_oauth_credential(provider, &cred)?;
+             }
+-            other => return Err(format!("Unsupported OAuth provider for auto-refresh: {}", other)),
++            other => {
++                return Err(format!(
++                    "Unsupported OAuth provider for auto-refresh: {}",
++                    other
++                ));
++            }
+         }
+     }
+ 
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:338:
+         assert!(!loaded_cred.is_expired());
+     }
+ 
+-
+     #[test]
+     fn test_expired_credential() {
+         let cred = OAuthCredential {
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-config/src/provider_oauth.rs:351:
+         assert!(cred.is_expired());
+     }
+ }
+-
+-
+ 
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/configure_wizard.rs:223:
+         .unwrap_or_else(|| {
+             let lower_url = base_url.to_lowercase();
+             let lower_model = model_id.to_lowercase();
+-            lower_url.contains("moonshot") || lower_url.contains("kimi") || lower_model.contains("kimi")
++            lower_url.contains("moonshot")
++                || lower_url.contains("kimi")
++                || lower_model.contains("kimi")
+         });
+ 
+     let auth_mode: &str = if provider_is_moonshot {
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/configure_wizard.rs:230:
+         select("Authentication method")
+-            .item("oauth", "OAuth 2.0 (Login via Kimi Browser / Device Flow)", "Recommended - login with Kimi account")
++            .item(
++                "oauth",
++                "OAuth 2.0 (Login via Kimi Browser / Device Flow)",
++                "Recommended - login with Kimi account",
++            )
+             .item("apikey", "API key (sk-...)", "Manual API key entry")
+             .interact()?
+     } else {
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/configure_wizard.rs:275:
+         Some(p) => p.id.to_owned(),
+         None => {
+             let suggested = derive_provider_id(&base_url);
+-            let raw: String = input("Provider id")
+-                .default_input(&suggested)
+-                .interact()?;
++            let raw: String = input("Provider id").default_input(&suggested).interact()?;
+             let raw = raw.trim();
+             if raw.is_empty() {
+                 suggested
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/configure_wizard.rs:288:
+     };
+ 
+     // 9. Default? The first model auto-becomes the default; otherwise ask.
+-    let set_default = is_first || confirm("Make this the default model for new sessions?").interact()?;
++    let set_default =
++        is_first || confirm("Make this the default model for new sessions?").interact()?;
+ 
+     let config = CustomModelConfig {
+         provider_id,
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/configure_wizard.rs:360:
+ }
+ 
+ pub fn perform_kimi_oauth_flow() -> Result<String> {
+-    use xai_grok_config::provider_oauth::{save_oauth_credential, KimiOAuthClient};
++    use xai_grok_config::provider_oauth::{KimiOAuthClient, save_oauth_credential};
+ 
+     let device_auth = block_on_async(KimiOAuthClient::request_device_authorization())
+         .map_err(|e| anyhow::anyhow!("Kimi OAuth authorization request failed: {e}"))?;
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/configure_wizard.rs:400:
+         }
+     }
+ }
+-
+ 
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager/src/models.rs:129:
+ }
+ 
+ fn remove(model: String) -> Result<()> {
+-    let default_cleared = remove_user_model(&model)
+-        .with_context(|| format!("failed to remove model '{model}'"))?;
++    let default_cleared =
++        remove_user_model(&model).with_context(|| format!("failed to remove model '{model}'"))?;
+     println!("Removed model {model}.");
+     if default_cleared {
+         println!(
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager-bin/src/main.rs:1847:
+                 return xai_grok_pager::memory_cmd::run(memory_args);
+             }
+             Command::Update { json, .. } => {
+-        init_tracing_simple("cli");
+-        let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
+-        if json {
+-            println!(
+-                "{}",
+-                serde_json::json!({
+-                    "enabled": false,
+-                    "channel": "alpha",
+-                    "repository": "yichensunjoe/DTTN-CLI",
+-                    "message": "DTTN self-update is not enabled in this alpha release. Install the latest version from the DTTN GitHub Release."
+-                })
+-            );
+-        } else {
+-            println!("DTTN self-update is not enabled in this alpha release.");
+-            println!("Install the latest version from the DTTN GitHub Release:");
+-            println!("  https://github.com/yichensunjoe/DTTN-CLI/releases");
+-        }
+-        return Ok(());
+-    }
++                init_tracing_simple("cli");
++                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
++                if json {
++                    println!(
++                        "{}",
++                        serde_json::json!({
++                            "enabled": false,
++                            "channel": "alpha",
++                            "repository": "yichensunjoe/DTTN-CLI",
++                            "message": "DTTN self-update is not enabled in this alpha release. Install the latest version from the DTTN GitHub Release."
++                        })
++                    );
++                } else {
++                    println!("DTTN self-update is not enabled in this alpha release.");
++                    println!("Install the latest version from the DTTN GitHub Release:");
++                    println!("  https://github.com/yichensunjoe/DTTN-CLI/releases");
++                }
++                return Ok(());
++            }
+             Command::Login {
+                 legacy: _,
+                 provider,
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager-bin/src/main.rs:1876:
+                 if let Some(ref p) = provider {
+                     match p.to_lowercase().as_str() {
+                         "kimi" | "moonshot" => {
+-                            let _token = xai_grok_pager::configure_wizard::perform_kimi_oauth_flow()?;
++                            let _token =
++                                xai_grok_pager::configure_wizard::perform_kimi_oauth_flow()?;
+                             println!("Logged in to Kimi successfully! Access token saved.");
+                             return Ok(());
+                         }
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-pager-pty-harness/src/env.rs:37:
+     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+     let mut cmd = Command::new(&cargo);
+     cmd.current_dir(workspace_root()?)
+-        .args([
+-            "build",
+-            "-p",
+-            "xai-grok-pager-bin",
+-            "--bin",
+-            "dttn",
+-        ])
++        .args(["build", "-p", "xai-grok-pager-bin", "--bin", "dttn"])
+         .stdin(Stdio::null())
+         .envs(xai_tty_utils::pager_env());
+     xai_tty_utils::detach_std_command(&mut cmd);
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-update/src/auto_update.rs:65:
+     }
+ 
+     if let Some(error) = status.error.as_deref() {
+-        println!(
+-            "DTTN - v{} [{}]",
+-            status.current_version, status.channel
+-        );
++        println!("DTTN - v{} [{}]", status.current_version, status.channel);
+         println!("Update check failed: {error}");
+         return Ok(());
+     }
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-update/src/auto_update.rs:3210:
+     fn test_reinstall_hint_npm_mentions_npm_command() {
+         let hint = reinstall_hint("npm");
+         assert!(hint.contains("npm i -g"), "should suggest npm i -g: {hint}");
+-        assert!(
+-            hint.contains("DTTN-CLI"),
+-            "should name the package: {hint}"
+-        );
++        assert!(hint.contains("DTTN-CLI"), "should name the package: {hint}");
+     }
+ 
+     #[test]
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-update/src/version.rs:15:
+ 
+ /// Primary CLI base URL: Cloudflare-fronted x.ai endpoint with edge caching
+ /// for binaries and origin-respecting no-cache for channel pointers.
+-pub(crate) const CLI_BASE_URL_PRIMARY: &str =
+-    "https://github.com/yichensunjoe/DTTN-CLI/releases";
++pub(crate) const CLI_BASE_URL_PRIMARY: &str = "https://github.com/yichensunjoe/DTTN-CLI/releases";
+ 
+ /// Fallback CLI base URL: direct GCS, used when the primary is unreachable
+ /// (Cloudflare outage, regional CF egress issue, DNS hijack, etc.).
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-version/build.rs:2:
+ use std::path::PathBuf;
+ 
+ fn main() {
+-    let manifest_dir = PathBuf::from(
+-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"),
+-    );
++    let manifest_dir =
++        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"));
+     let shipping_manifest = manifest_dir.join("../xai-grok-pager-bin/Cargo.toml");
+     println!("cargo:rerun-if-changed={}", shipping_manifest.display());
+ 
+Diff in /home/runner/work/DTTN-CLI/DTTN-CLI/crates/codegen/xai-grok-version/build.rs:12:
+         .unwrap_or_else(|error| panic!("failed to read {}: {error}", shipping_manifest.display()));
+     let version = manifest
+         .lines()
+-        .find_map(|line| line.strip_prefix("version = \"").and_then(|value| value.strip_suffix('"')))
++        .find_map(|line| {
++            line.strip_prefix("version = \"")
++                .and_then(|value| value.strip_suffix('"'))
++        })
+         .expect("xai-grok-pager-bin package version must be present");
+ 
+     println!("cargo:rustc-env=DTTN_VERSION={version}");
