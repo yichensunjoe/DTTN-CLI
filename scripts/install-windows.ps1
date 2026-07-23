@@ -206,15 +206,21 @@ try {
         New-Item -ItemType Directory -Path $absoluteInstallDir -Force | Out-Null
 
         $destination = Join-Path $absoluteInstallDir 'dttn.exe'
-        $stagedDestination = "$destination.new-$PID"
-        Copy-Item -LiteralPath $binary.FullName -Destination $stagedDestination -Force
+        $stagedName = "dttn.install-$([Guid]::NewGuid().ToString('N')).exe"
+        $stagedDestination = Join-Path $absoluteInstallDir $stagedName
+        try {
+            Copy-Item -LiteralPath $binary.FullName -Destination $stagedDestination -Force
 
-        & $stagedDestination --help | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Downloaded dttn.exe failed its startup check with exit code $LASTEXITCODE."
+            & $stagedDestination --help | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Downloaded dttn.exe failed its startup check with exit code $LASTEXITCODE."
+            }
+
+            Move-Item -LiteralPath $stagedDestination -Destination $destination -Force
         }
-
-        Move-Item -LiteralPath $stagedDestination -Destination $destination -Force
+        finally {
+            Remove-Item -LiteralPath $stagedDestination -Force -ErrorAction SilentlyContinue
+        }
 
         if (-not $NoPathUpdate) {
             Add-InstallDirToUserPath -Directory $absoluteInstallDir
