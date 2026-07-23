@@ -66,13 +66,15 @@ Example:
 git clone https://github.com/yichensunjoe/DTTN-CLI.git
 Set-Location DTTN-CLI
 choco install protoc --no-progress -y
-cargo build --locked --release `
+cargo build --locked --profile release-dist `
   -p xai-grok-pager-bin `
   --bin dttn `
   --features release-dist
 
-.\target\release\dttn.exe --help
+.\target\release-dist\dttn.exe --help
 ```
+
+`release-dist` is the repository's hardened distribution profile. It enables the intended link-time optimization and release metadata settings; a plain `--release` build is intended for faster local development.
 
 ## Configuration
 
@@ -97,7 +99,7 @@ Avoid putting API keys directly into scripts, shell history, source control, or 
 
 The Windows build is native, but the existing kernel sandbox backend is implemented for Unix systems. On Windows, the `sandbox-enforce` feature currently has no kernel-enforcement backend. Treat commands and external tools launched by DTTN as unsandboxed until a Windows security backend is implemented.
 
-The release workflow validates compilation, binary startup, archive integrity, and a real offline installer round trip on `windows-latest`. Full-screen TUI behavior should additionally be tested manually in Windows Terminal before a release is marked stable.
+The release workflow validates compilation, binary startup, archive integrity, checksum rejection, and a real offline installer round trip on `windows-latest`. Full-screen TUI behavior should additionally be tested manually in Windows Terminal before a release is marked stable.
 
 ## Uninstall
 
