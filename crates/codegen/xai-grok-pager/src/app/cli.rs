@@ -410,7 +410,7 @@ fn version_with_channel() -> &'static str {
     static V: OnceLock<String> = OnceLock::new();
     V.get_or_init(|| {
         let label = xai_grok_update::channel_label();
-        xai_grok_version::display_version_with_commit(env!("VERSION_WITH_COMMIT"), label)
+        xai_grok_version::display_version(label)
     })
 }
 #[derive(Debug, Clone, Parser)]
