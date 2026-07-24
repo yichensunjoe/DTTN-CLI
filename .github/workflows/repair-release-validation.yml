@@ -1,0 +1,81 @@
+name: Repair release validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/repair-release-validation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+
+      - name: Unify CLI version source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/codegen/xai-grok-pager/src/app/cli.rs')
+          text = path.read_text()
+          old = 'xai_grok_version::display_version_with_commit(env!("VERSION_WITH_COMMIT"), label)'
+          new = 'xai_grok_version::display_version(label)'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one version source occurrence, found {count}')
+          path.write_text(text.replace(old, new))
+          PY
+          rustfmt --edition 2024 --config skip_children=true crates/codegen/xai-grok-pager/src/app/cli.rs
+
+      - name: Run config CLI contract and capture failure tail
+        id: config_test
+        shell: bash
+        run: |
+          set +e
+          cargo test -p xai-grok-pager-bin --test config_cli_contract -- --nocapture > /tmp/config-cli-contract.log 2>&1
+          status=$?
+          set -e
+          tail -n 240 /tmp/config-cli-contract.log > .ci-config-contract-tail.txt
+          if [[ $status -eq 0 ]]; then
+            rm .ci-config-contract-tail.txt
+          fi
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+
+      - name: Commit repair and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/repair-release-validation.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if [[ '${{ steps.config_test.outputs.status }}' == '0' ]]; then
+            message='fix: use canonical DTTN version in CLI'
+          else
+            message='debug: capture config CLI contract failure'
+          fi
+          git commit -m "$message"
+          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Enforce config CLI contract
+        if: steps.config_test.outputs.status != '0'
+        shell: bash
+        run: exit 1
