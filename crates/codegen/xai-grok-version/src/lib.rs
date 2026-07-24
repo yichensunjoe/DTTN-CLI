@@ -1,18 +1,17 @@
-//! Installed grok CLI version, lockstepped with shipping binaries.
+//! Installed DTTN CLI version, sourced from the shipping binary package.
 
 use semver::Version;
 
-pub const TEST_VERSION_ENV: &str = "GROK_TEST_VERSION";
+pub const TEST_VERSION_ENV: &str = "DTTN_TEST_VERSION";
+pub const LEGACY_TEST_VERSION_ENV: &str = "GROK_TEST_VERSION";
 
-pub const VERSION: &str = match option_env!("GROK_VERSION") {
-    Some(v) => v,
-    None => env!("CARGO_PKG_VERSION"),
-};
+pub const VERSION: &str = env!("DTTN_VERSION");
 
 /// [`TEST_VERSION_ENV`] override first, then [`VERSION`]. Trimmed so
 /// non-semver-aware callers can pass the result straight into parsing.
 pub fn installed() -> String {
     std::env::var(TEST_VERSION_ENV)
+        .or_else(|_| std::env::var(LEGACY_TEST_VERSION_ENV))
         .map(|v| v.trim().to_string())
         .unwrap_or_else(|_| VERSION.to_string())
 }

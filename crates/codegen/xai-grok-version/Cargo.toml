@@ -3,7 +3,8 @@ license = "Apache-2.0"
 name = "xai-grok-version"
 version = "0.2.0-dev"
 edition.workspace = true
-description = "Lockstepped grok CLI version."
+build = "build.rs"
+description = "Lockstepped DTTN CLI version sourced from the shipping binary package."
 
 [dependencies]
 semver = { workspace = true }

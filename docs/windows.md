@@ -110,3 +110,17 @@ Remove-Item "$env:LOCALAPPDATA\Programs\DTTN\bin\dttn.exe" -Force
 ```
 
 The installer does not delete DTTN configuration or session data. Remove those separately only when they are no longer needed.
+
+
+## Release channels
+
+The default installer resolves GitHub's latest stable release and does not select prereleases.
+Install an Alpha or release candidate only by passing its exact tag:
+
+```powershell
+.\scripts\install-windows.ps1 -Version v0.1.220-alpha.5
+```
+
+In-process self-update is intentionally disabled for the first public Alpha. Upgrade by running
+the installer again with an explicit tag or, after a stable release exists, with the default
+`latest` selection.
